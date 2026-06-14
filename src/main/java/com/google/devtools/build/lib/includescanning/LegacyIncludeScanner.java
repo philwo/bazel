@@ -563,6 +563,18 @@ public class LegacyIncludeScanner implements IncludeScanner {
     if (isOutputFile(execPath)) {
       return headerData.isDeclaredHeader(execPath);
     }
+    // Shortcut: If this is a declared header, it's bound to exist. Checked BEFORE the
+    // directory-existence optimization below: that optimization mis-resolves directories that live
+    // inside an external repository (getPathFromSourceExecPath/findSourceRoot fail to map an
+    // external-repo subdirectory path back to its source root), so it would spuriously reject a
+    // declared subdirectory header such as "unicode/utypes.h" included via an `-I` into an external
+    // repo. Declared headers are known inputs, so we can return early and skip the stat-avoidance
+    // optimization entirely for them. This lets include scanning prune the inputs of remote
+    // C/C++ compiles when all headers are declared via a catch-all cc_library in an external
+    // repo.
+    if (headerData.isDeclaredHeader(execPath)) {
+      return true;
+    }
     // TODO(djasper): This code path cannot be hit with isSource being false. Verify and add
     // Preconditions check.
     if (isSource && !execPath.isAbsolute() && execPath.endsWith(includeAsWritten)) {
@@ -577,10 +589,6 @@ public class LegacyIncludeScanner implements IncludeScanner {
           return false;
         }
       }
-    }
-    // Shortcut: If this is a declared header, it's bound to exist.
-    if (headerData.isDeclaredHeader(execPath)) {
-      return true;
     }
     return pathCache.fileExists(execPath, isSource);
   }
