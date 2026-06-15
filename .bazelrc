@@ -80,6 +80,13 @@ common --@rules_java//toolchains:incompatible_language_version_bootclasspath
 # Fail if a classpath contains different versions of the same class
 common --experimental_one_version_enforcement=ERROR
 
+# Stamp locally built binaries with the Git commit they were built from, so that
+# `bazel version` on e.g. a locally built //src:bazel reports it as the "Build
+# label". See scripts/get_local_workspace_status.sh for the emitted
+# BUILD_EMBED_LABEL.
+build --stamp
+build --workspace_status_command=scripts/get_local_workspace_status.sh
+
 # User-specific .bazelrc
 try-import %workspace%/user.bazelrc
 
