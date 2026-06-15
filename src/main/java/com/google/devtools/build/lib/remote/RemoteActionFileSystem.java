@@ -23,6 +23,7 @@ import static com.google.devtools.build.lib.remote.util.Futures.getFromFuture;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -35,6 +36,7 @@ import com.google.devtools.build.lib.actions.ActionInputPrefetcher.Reason;
 import com.google.devtools.build.lib.actions.Artifact.TreeArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileContentsProxy;
 import com.google.devtools.build.lib.actions.FileStatusWithMetadata;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler.LostArtifacts;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
@@ -113,6 +115,12 @@ public class RemoteActionFileSystem extends FileSystem {
   private final RemoteActionInputFetcher inputFetcher;
   private final FileSystem localFs;
   private final RemoteInMemoryFileSystem remoteOutputTree;
+  // When non-null, an action's previous outputs are moved here instead of being deleted before
+  // re-execution, so they can be reused if the action reproduces them. See OutputReuseStash.
+  @Nullable private final OutputReuseStash reuseStash;
+  // Metadata of the action's previous outputs (digest + contents proxy) from the prior action cache
+  // entry, keyed by exec path string. Used to identify reusable on-disk outputs without rehashing.
+  private ImmutableMap<String, FileArtifactValue> staleOutputMetadata = ImmutableMap.of();
   // Concurrent access is rare and most builds don't have lost inputs.
   private final List<LostArtifacts> lostInputs = Collections.synchronizedList(new ArrayList<>(0));
 
@@ -243,6 +251,22 @@ public class RemoteActionFileSystem extends FileSystem {
       String relativeOutputPath,
       InputMetadataProvider inputArtifactData,
       RemoteActionInputFetcher inputFetcher) {
+    this(
+        localFs,
+        execRootFragment,
+        relativeOutputPath,
+        inputArtifactData,
+        inputFetcher,
+        /* reuseStash= */ null);
+  }
+
+  public RemoteActionFileSystem(
+      FileSystem localFs,
+      PathFragment execRootFragment,
+      String relativeOutputPath,
+      InputMetadataProvider inputArtifactData,
+      RemoteActionInputFetcher inputFetcher,
+      @Nullable OutputReuseStash reuseStash) {
     super(localFs.getDigestFunction());
     this.execRoot = checkNotNull(execRootFragment, "execRootFragment");
     this.outputBase = execRoot.getRelative(checkNotNull(relativeOutputPath, "relativeOutputPath"));
@@ -265,6 +289,7 @@ public class RemoteActionFileSystem extends FileSystem {
                 return readSymbolicLinkInternal(path);
               }
             });
+    this.reuseStash = reuseStash;
   }
 
   @Override
@@ -315,8 +340,10 @@ public class RemoteActionFileSystem extends FileSystem {
         && fileStatusWithMetadata.getMetadata().isRemote();
   }
 
-  public void updateContext(ActionExecutionMetadata action) {
+  public void updateContext(
+      ActionExecutionMetadata action, ImmutableMap<String, FileArtifactValue> staleOutputMetadata) {
     this.action = action;
+    this.staleOutputMetadata = staleOutputMetadata;
   }
 
   void injectRemoteFile(
@@ -382,12 +409,78 @@ public class RemoteActionFileSystem extends FileSystem {
     // there's no risk of a race condition below.
     pathCanonicalizer.clearPrefix(originalPath);
 
-    boolean deleted = localFs.getPath(path).delete();
+    boolean deleted;
+    Path localPath = localFs.getPath(path);
+    if (isOutput(path) && tryStashOutput(path, localPath)) {
+      // The output was moved into the reuse stash rather than deleted; it no longer exists here.
+      deleted = true;
+    } else {
+      deleted = localPath.delete();
+    }
     if (isOutput(path)) {
       deleted = remoteOutputTree.getPath(path).delete() || deleted;
     }
 
     return deleted;
+  }
+
+  /**
+   * If output reuse is enabled and {@code localPath} is a regular file whose digest is known, moves
+   * it into the reuse stash and returns true. Returns false (leaving the file untouched) if reuse
+   * is disabled or no trustworthy digest is available, so the caller deletes it as usual. Any I/O
+   * error is swallowed and treated as "not stashed".
+   */
+  private boolean tryStashOutput(PathFragment path, Path localPath) {
+    if (reuseStash == null) {
+      return false;
+    }
+    try {
+      FileStatus stat = localPath.statIfFound(Symlinks.NOFOLLOW);
+      if (stat == null || !stat.isFile()) {
+        return false;
+      }
+      byte[] digest = digestForReuse(path, stat, localPath);
+      if (digest == null) {
+        return false;
+      }
+      reuseStash.stash(localPath, digest);
+      return true;
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  /**
+   * Returns a cheaply-available digest of the on-disk output at {@code path}, or null if none can
+   * be obtained without reading the whole file. Prefers the digest recorded by the previous action
+   * cache entry, validated against the current file via its contents proxy (no rehash); otherwise
+   * uses a fast (e.g. xattr) digest. Deliberately never reads the file contents: reuse is an
+   * optimization on the pre-execution delete path, so a missing cheap digest means "don't stash"
+   * rather than paying a full rehash of every output about to be regenerated.
+   */
+  @Nullable
+  private byte[] digestForReuse(PathFragment path, FileStatus stat, Path localPath)
+      throws IOException {
+    FileArtifactValue stale = staleOutputMetadata.get(path.relativeTo(execRoot).getPathString());
+    if (stale != null && stale.getDigest() != null) {
+      FileContentsProxy proxy = stale.getContentsProxy();
+      if (proxy != null && proxy.equals(FileContentsProxy.create(stat))) {
+        return stale.getDigest();
+      }
+    }
+    return localPath.getFastDigest();
+  }
+
+  /**
+   * If an output with the given {@code digest} was previously moved into the reuse stash, moves it
+   * to {@code path} and returns true, so the caller can skip downloading it. Returns false if reuse
+   * is disabled or no matching bytes are stashed.
+   */
+  public boolean reclaimStashedOutput(PathFragment path, byte[] digest) {
+    if (reuseStash == null) {
+      return false;
+    }
+    return reuseStash.reclaim(localFs.getPath(path), digest);
   }
 
   @Override

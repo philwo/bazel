@@ -688,7 +688,8 @@ public final class RemoteModule extends BlazeModule {
       outputService =
           new RemoteOutputService(
               env.getDirectories(),
-              buildRequestOptions != null && buildRequestOptions.getRewindLostInputs());
+              buildRequestOptions != null && buildRequestOptions.getRewindLostInputs(),
+              remoteOptions.getReuseExistingOutputs());
     }
 
     // Verifying that the blobs referenced by a disk cache action result are present locally turns

@@ -122,6 +122,21 @@ public abstract class RemoteOptions extends CommonRemoteOptions {
   public abstract boolean getRemoteExecutionKeepalive();
 
   @Option(
+      name = "experimental_remote_reuse_existing_outputs",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.REMOTE,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          """
+          If true, Bazel moves an action's previous outputs aside before the action runs \
+          instead of deleting them. When a remote cache hit or remote execution then produces \
+          an output with the digest of such a file, Bazel moves the file back and skips the \
+          download. Only takes effect when an action filesystem is in use (i.e. with remote \
+          caching/execution).\
+          """)
+  public abstract boolean getReuseExistingOutputs();
+
+  @Option(
       name = "experimental_remote_capture_corrupted_outputs",
       defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.REMOTE,

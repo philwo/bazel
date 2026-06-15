@@ -513,9 +513,10 @@ public final class SkyframeActionExecutor {
       Action action,
       FileSystem actionFileSystem,
       InputMetadataProvider inputMetadataProvider,
-      OutputMetadataStore outputMetadataStore) {
+      OutputMetadataStore outputMetadataStore,
+      ImmutableMap<String, FileArtifactValue> staleOutputMetadata) {
     outputService.updateActionFileSystemContext(
-        action, actionFileSystem, inputMetadataProvider, outputMetadataStore);
+        action, actionFileSystem, inputMetadataProvider, outputMetadataStore, staleOutputMetadata);
   }
 
   void executionOver() {
@@ -709,11 +710,16 @@ public final class SkyframeActionExecutor {
       @Nullable FileSystem actionFileSystem,
       ActionPostprocessing postprocessing,
       boolean hasDiscoveredInputs,
-      @Nullable ActionExecutionValue previousOutputs)
+      @Nullable ActionExecutionValue previousOutputs,
+      @Nullable ActionCacheChecker.Token token)
       throws ActionExecutionException, InterruptedException {
     if (actionFileSystem != null) {
       updateActionFileSystemContext(
-          action, actionFileSystem, compositeInputMetadataProvider, outputMetadataStore);
+          action,
+          actionFileSystem,
+          compositeInputMetadataProvider,
+          outputMetadataStore,
+          token != null ? token.getStaleOutputMetadata() : ImmutableMap.of());
     }
 
     ActionExecutionContext actionExecutionContext =
@@ -1066,7 +1072,8 @@ public final class SkyframeActionExecutor {
           action,
           actionFileSystem,
           compositeInputMetadataProvider,
-          THROWING_OUTPUT_METADATA_STORE_FOR_ACTIONFS);
+          THROWING_OUTPUT_METADATA_STORE_FOR_ACTIONFS,
+          ImmutableMap.of());
       // Note that when not using ActionFS, a global setup of the parent directories of the OutErr
       // streams is sufficient.
       setupActionFsFileOutErr(fileOutErr, action);

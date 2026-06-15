@@ -1376,6 +1376,13 @@ public class RemoteExecutionService {
       var execPath = file.path.relativeTo(execRoot);
       var isInMemoryOutputFile = inMemoryOutput != null && execPath.equals(inMemoryOutputPath);
       if (!isInMemoryOutputFile && shouldDownload(result, execPath, /* treeRootExecPath= */ null)) {
+        if (remoteActionFileSystem != null
+            && remoteActionFileSystem.reclaimStashedOutput(
+                file.path().asFragment(), DigestUtil.toBinaryDigest(file.digest()))) {
+          // The action's previous output had identical content; reclaim it from the stash instead
+          // of re-downloading the bytes.
+          continue;
+        }
         Path tmpPath = tempPathGenerator.generateTempPath();
         realToTmpPath.put(file.path, tmpPath);
         downloadsBuilder.add(
@@ -1432,6 +1439,13 @@ public class RemoteExecutionService {
         }
 
         if (shouldDownload(result, file.path.relativeTo(execRoot), treeRootExecPath)) {
+          if (remoteActionFileSystem != null
+              && remoteActionFileSystem.reclaimStashedOutput(
+                  file.path().asFragment(), DigestUtil.toBinaryDigest(file.digest()))) {
+            // The action's previous output had identical content; reclaim it from the stash instead
+            // of re-downloading the bytes.
+            continue;
+          }
           Path tmpPath = tempPathGenerator.generateTempPath();
           realToTmpPath.put(file.path, tmpPath);
           downloadsBuilder.add(

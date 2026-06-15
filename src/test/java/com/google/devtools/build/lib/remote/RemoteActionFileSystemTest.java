@@ -113,7 +113,7 @@ public final class RemoteActionFileSystemTest extends RemoteActionFileSystemTest
     RemoteActionFileSystem remoteActionFileSystem =
         new RemoteActionFileSystem(
             fs, execRoot.asFragment(), RELATIVE_OUTPUT_PATH, inputs, inputFetcher);
-    remoteActionFileSystem.updateContext(mock(ActionExecutionMetadata.class));
+    remoteActionFileSystem.updateContext(mock(ActionExecutionMetadata.class), ImmutableMap.of());
     remoteActionFileSystem.createDirectoryAndParents(outputRoot.getRoot().asPath().asFragment());
     return remoteActionFileSystem;
   }
@@ -520,6 +520,39 @@ public final class RemoteActionFileSystemTest extends RemoteActionFileSystemTest
 
     assertThat(actionFs.getFastDigest(path)).isNull();
     assertThat(actionFs.getDigest(path)).isEqualTo(getDigest("local contents"));
+  }
+
+  @Test
+  public void delete_outputReuseEnabled_withoutCheapDigest_doesNotRehash() throws Exception {
+    // With output reuse enabled, deleting an output before re-execution must not fall back to a
+    // full-file content hash when no cheap digest (stale-metadata proxy or fast/xattr digest) is
+    // available: that would read every output about to be regenerated on the hot delete path. Such
+    // outputs are simply not stashed.
+    OutputReuseStash reuseStash = new OutputReuseStash(fs.getPath("/stash"));
+    doReturn(DUMMY_REMOTE_OUTPUT_CHECKER).when(inputFetcher).getRemoteOutputChecker();
+    RemoteActionFileSystem actionFs =
+        new RemoteActionFileSystem(
+            fs,
+            execRoot.asFragment(),
+            RELATIVE_OUTPUT_PATH,
+            new ActionInputMap(0),
+            inputFetcher,
+            reuseStash);
+    actionFs.updateContext(mock(ActionExecutionMetadata.class), ImmutableMap.of());
+    actionFs.createDirectoryAndParents(outputRoot.getRoot().asPath().asFragment());
+
+    Artifact artifact = ActionsTestUtil.createArtifact(outputRoot, "out");
+    PathFragment path = artifact.getPath().asFragment();
+    writeLocalFile(actionFs, path, "local contents");
+    // No stale metadata is recorded and an in-memory file has no fast digest, so the only way to
+    // obtain a digest would be a full content read.
+    assertThat(actionFs.getFastDigest(path)).isNull();
+
+    reset(fs);
+    assertThat(actionFs.delete(path)).isTrue();
+
+    verify(fs, never()).getDigest(any());
+    assertThat(actionFs.exists(path)).isFalse();
   }
 
   @Test

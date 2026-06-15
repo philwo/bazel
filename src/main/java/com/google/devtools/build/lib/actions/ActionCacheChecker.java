@@ -535,6 +535,13 @@ public class ActionCacheChecker {
         outputChecker,
         useArchivedTreeArtifacts)) {
       if (entry != null) {
+        // Hand the previous outputs' metadata to the executor so it can reuse any on-disk output
+        // whose digest is reproduced by the re-executed action instead of re-fetching it. Only
+        // populated when output metadata is stored (the prerequisite for reuse); otherwise the
+        // entry carries no output metadata and retaining the map would be pure overhead.
+        if (!entry.isCorrupted() && cacheConfig.storeOutputMetadata()) {
+          token.staleOutputMetadata = entry.getOutputFiles();
+        }
         removeCacheEntry(action);
       }
       return token;
@@ -910,6 +917,13 @@ public class ActionCacheChecker {
      */
     @Nullable private volatile byte[] inputDigest;
 
+    /**
+     * The metadata (including digest and contents proxy) of the action's outputs as recorded by the
+     * previous action cache entry, keyed by exec path string, or empty if there was no usable
+     * entry. Used to identify on-disk outputs eligible for reuse before they are deleted.
+     */
+    private ImmutableMap<String, FileArtifactValue> staleOutputMetadata = ImmutableMap.of();
+
     private Token(Action action) {
       this.cacheKey = action.getPrimaryOutput().getExecPathString();
     }
@@ -921,6 +935,10 @@ public class ActionCacheChecker {
 
     void setInputDigest(byte[] inputDigest) {
       this.inputDigest = inputDigest;
+    }
+
+    public ImmutableMap<String, FileArtifactValue> getStaleOutputMetadata() {
+      return staleOutputMetadata;
     }
   }
 

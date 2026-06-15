@@ -477,6 +477,16 @@ java_library(
 )
 
 java_library(
+    name = "output_reuse_stash",
+    srcs = ["OutputReuseStash.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
+)
+
+java_library(
     name = "remote_action_file_system",
     srcs = ["RemoteActionFileSystem.java"],
     visibility = [
@@ -484,6 +494,7 @@ java_library(
         "//src/tools/remote:__subpackages__",
     ],
     deps = [
+        ":output_reuse_stash",
         ":path_canonicalizer",
         ":remote_action_input_fetcher",
         "//src/main/java/com/google/devtools/build/lib/actions",
@@ -766,12 +777,14 @@ java_library(
     ],
     deps = [
         ":lease_service",
+        ":output_reuse_stash",
         ":remote_action_file_system",
         ":remote_action_input_fetcher",
         ":remote_output_checker",
         ":remote_rewound_action_synchronizer",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/actions:output_checker",
         "//src/main/java/com/google/devtools/build/lib/actions:output_metadata_store",
         "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
@@ -784,6 +797,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/protobuf:failure_details_java_proto",
+        "//third_party/java/flogger",
         "//third_party/java/guava:base",
         "//third_party/java/guava:collect",
         "//third_party/java/guava:eventbus",

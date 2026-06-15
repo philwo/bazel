@@ -15,11 +15,13 @@
 package com.google.devtools.build.lib.vfs;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.OutputChecker;
@@ -228,7 +230,8 @@ public interface OutputService {
       ActionExecutionMetadata action,
       FileSystem actionFileSystem,
       InputMetadataProvider inputMetadataProvider,
-      OutputMetadataStore outputMetadataStore) {}
+      OutputMetadataStore outputMetadataStore,
+      ImmutableMap<String, FileArtifactValue> staleOutputMetadata) {}
 
   /**
    * Checks the filesystem returned by {@link #createActionFileSystem} for errors attributable to

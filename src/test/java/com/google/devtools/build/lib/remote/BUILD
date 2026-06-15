@@ -149,6 +149,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/remote:path_canonicalizer",
         "//src/main/java/com/google/devtools/build/lib/remote:remote_action",
         "//src/main/java/com/google/devtools/build/lib/remote:remote_action_context_provider",
+        "//src/main/java/com/google/devtools/build/lib/remote:output_reuse_stash",
         "//src/main/java/com/google/devtools/build/lib/remote:remote_action_file_system",
         "//src/main/java/com/google/devtools/build/lib/remote:remote_action_input_fetcher",
         "//src/main/java/com/google/devtools/build/lib/remote:remote_download_idle_timeout_interceptor",

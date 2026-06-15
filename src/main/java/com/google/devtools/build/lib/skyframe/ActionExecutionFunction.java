@@ -878,7 +878,8 @@ public class ActionExecutionFunction implements SkyFunction {
         state.actionFileSystem,
         new ActionPostprocessingImpl(state),
         state.discoveredInputs != null,
-        previousOutputs);
+        previousOutputs,
+        state.token);
   }
 
   /** Implementation of {@link ActionPostprocessing}. */

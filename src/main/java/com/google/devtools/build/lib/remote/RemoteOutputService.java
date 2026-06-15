@@ -17,10 +17,13 @@ package com.google.devtools.build.lib.remote;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.eventbus.Subscribe;
+import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
 import com.google.devtools.build.lib.actions.LostInputsActionExecutionException;
 import com.google.devtools.build.lib.actions.LostInputsExecException;
@@ -50,18 +53,26 @@ import javax.annotation.Nullable;
 /** Output service implementation for the remote build without local output service daemon. */
 public class RemoteOutputService implements OutputService {
 
+  private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
   private final BlazeDirectories directories;
   private final boolean rewindLostInputs;
+  private final boolean reuseExistingOutputs;
 
   private RewoundActionSynchronizer rewoundActionSynchronizer = RewoundActionSynchronizer.NOOP;
 
   @Nullable private RemoteOutputChecker remoteOutputChecker;
   @Nullable private RemoteActionInputFetcher actionInputFetcher;
   @Nullable private LeaseService leaseService;
+  // Build-scoped pool of outputs moved aside instead of deleted, for reuse across re-execution.
+  // Created lazily when the first action filesystem is built; discarded in finalizeBuild.
+  @Nullable private volatile OutputReuseStash reuseStash;
 
-  RemoteOutputService(BlazeDirectories directories, boolean rewindLostInputs) {
+  RemoteOutputService(
+      BlazeDirectories directories, boolean rewindLostInputs, boolean reuseExistingOutputs) {
     this.directories = checkNotNull(directories);
     this.rewindLostInputs = rewindLostInputs;
+    this.reuseExistingOutputs = reuseExistingOutputs;
   }
 
   void setRemoteOutputChecker(RemoteOutputChecker remoteOutputChecker) {
@@ -103,7 +114,24 @@ public class RemoteOutputService implements OutputService {
         execRootFragment,
         relativeOutputPath,
         inputArtifactData,
-        actionInputFetcher);
+        actionInputFetcher,
+        reuseExistingOutputs ? getOrCreateReuseStash(delegateFileSystem) : null);
+  }
+
+  private OutputReuseStash getOrCreateReuseStash(FileSystem fs) {
+    OutputReuseStash stash = reuseStash;
+    if (stash == null) {
+      synchronized (this) {
+        stash = reuseStash;
+        if (stash == null) {
+          Path stashDir =
+              fs.getPath(directories.getOutputBase().asFragment()).getChild("remote_reuse_stash");
+          stash = new OutputReuseStash(stashDir);
+          reuseStash = stash;
+        }
+      }
+    }
+    return stash;
   }
 
   @Override
@@ -111,8 +139,9 @@ public class RemoteOutputService implements OutputService {
       ActionExecutionMetadata action,
       FileSystem actionFileSystem,
       InputMetadataProvider inputMetadataProvider,
-      OutputMetadataStore outputMetadataStore) {
-    ((RemoteActionFileSystem) actionFileSystem).updateContext(action);
+      OutputMetadataStore outputMetadataStore,
+      ImmutableMap<String, FileArtifactValue> staleOutputMetadata) {
+    ((RemoteActionFileSystem) actionFileSystem).updateContext(action, staleOutputMetadata);
   }
 
   @Override
@@ -155,7 +184,17 @@ public class RemoteOutputService implements OutputService {
 
   @Override
   public void finalizeBuild(boolean buildSuccessful) {
-    // Intentionally left empty.
+    OutputReuseStash stash = reuseStash;
+    reuseStash = null;
+    if (stash != null) {
+      try {
+        stash.discardAll();
+      } catch (IOException e) {
+        // Leftover stash entries are harmless temp data under the output base; failing to clean
+        // them up must not fail the build.
+        logger.atWarning().withCause(e).log("Failed to clean up the output reuse stash");
+      }
+    }
   }
 
   @Subscribe
