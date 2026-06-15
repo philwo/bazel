@@ -20,11 +20,13 @@ import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.collect.compacthashmap.CompactHashMap;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.io.IOException;
+import java.util.AbstractMap;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -218,6 +220,7 @@ public interface IncludeScanner {
       private List<PathFragment> systemIncludeDirs = ImmutableList.of();
       private List<String> cmdlineIncludes = ImmutableList.of();
       @Nullable private Predicate<Artifact> isValidUndeclaredHeader = null;
+      @Nullable private Map<PathFragment, Artifact> addedDeclaredHeaders = null;
 
       public Builder(
           Map<PathFragment, Artifact> pathToDeclaredHeader, Set<Artifact> modularHeaders) {
@@ -249,12 +252,10 @@ public interface IncludeScanner {
         if (headers.isEmpty()) {
           return this;
         }
-        // pathToDeclaredHeader is a fresh, per-action mutable CompactHashMap created by
-        // CcCompilationContext#createIncludeScanningHeaderData (which intentionally avoids the
-        // more expensive ImmutableMap). Mutating it in place here is therefore safe -- it is not
-        // shared across actions -- and consistent with that method's performance choice.
-        // Not using range-based for loops here as the additional overhead of the ImmutableList
-        // iterators has shown up in profiles.
+        // pathToDeclaredHeader may be shared with other actions (CcCompilationContext caches it
+        // per header info), so record additional headers in a per-action map instead of mutating
+        // it. Not using range-based for loops here as the additional overhead of the
+        // ImmutableList iterators has shown up in profiles.
         ImmutableList<Artifact> headerList = headers.toList();
         for (int i = 0; i < headerList.size(); i++) {
           Artifact header = headerList.get(i);
@@ -264,10 +265,16 @@ public interface IncludeScanner {
           // common case of a source-file sysroot (e.g. GRTE), leaving those toolchains
           // entirely unaffected. Tree artifacts are handled separately and are skipped.
           if (!header.isSourceArtifact() && !header.isTreeArtifact()) {
-            // Use putIfAbsent so a header the target already declared for this exec path takes
-            // precedence: the target's own mapping is authoritative and must not be shadowed by
-            // a toolchain/prunable header that happens to share the path.
-            pathToDeclaredHeader.putIfAbsent(header.getExecPath(), header);
+            // A header the target already declared for this exec path takes precedence: the
+            // target's own mapping is authoritative and must not be shadowed by a
+            // toolchain/prunable header that happens to share the path.
+            PathFragment execPath = header.getExecPath();
+            if (!pathToDeclaredHeader.containsKey(execPath)) {
+              if (addedDeclaredHeaders == null) {
+                addedDeclaredHeaders = CompactHashMap.create();
+              }
+              addedDeclaredHeaders.putIfAbsent(execPath, header);
+            }
           }
         }
         return this;
@@ -275,11 +282,41 @@ public interface IncludeScanner {
 
       public IncludeScanningHeaderData build() {
         return new IncludeScanningHeaderData(
-            pathToDeclaredHeader,
+            addedDeclaredHeaders == null
+                ? pathToDeclaredHeader
+                : new OverlayPathMap(pathToDeclaredHeader, addedDeclaredHeaders),
             modularHeaders,
             systemIncludeDirs,
             cmdlineIncludes,
             isValidUndeclaredHeader);
+      }
+
+      /** A lookup-only view of a base map, extended by entries for paths the base lacks. */
+      private static final class OverlayPathMap extends AbstractMap<PathFragment, Artifact> {
+        private final Map<PathFragment, Artifact> base;
+        private final Map<PathFragment, Artifact> added;
+
+        OverlayPathMap(Map<PathFragment, Artifact> base, Map<PathFragment, Artifact> added) {
+          this.base = base;
+          this.added = added;
+        }
+
+        @Override
+        @Nullable
+        public Artifact get(Object key) {
+          Artifact artifact = base.get(key);
+          return artifact != null ? artifact : added.get(key);
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+          return base.containsKey(key) || added.containsKey(key);
+        }
+
+        @Override
+        public Set<Entry<PathFragment, Artifact>> entrySet() {
+          throw new UnsupportedOperationException("OverlayPathMap is lookup-only");
+        }
       }
     }
   }

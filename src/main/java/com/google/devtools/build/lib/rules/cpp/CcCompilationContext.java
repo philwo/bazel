@@ -19,6 +19,8 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -293,6 +295,29 @@ public final class CcCompilationContext {
     }
   }
 
+  /** The path map and modular header set used to seed include scanning for a header info. */
+  private record CachedHeaderScanData(
+      Map<PathFragment, Artifact> pathToLegalArtifact, Set<Artifact> modularHeaders) {}
+
+  private record HeaderScanCacheKey(
+      HeaderInfo headerInfo, boolean usePic, boolean createModularHeaders) {}
+
+  /**
+   * Memoizes the include-scanning path map and modular-header set per header info (keyed by header
+   * info identity plus the two boolean knobs). With a global header pool, these are the same
+   * ~130k-entry map rebuilt for every compile action that shares a CcCompilationContext, which
+   * dominated client CPU (CompactHashMap.put) on cache-hit remote builds. Only memoized when no tree
+   * artifacts are present, since otherwise the result depends on Skyframe-resolved tree contents.
+   * Bounded by total entry count so memory stays in check.
+   */
+  private static final Cache<HeaderScanCacheKey, CachedHeaderScanData> HEADER_SCAN_DATA_CACHE =
+      CacheBuilder.newBuilder()
+          .maximumWeight(40_000_000)
+          .weigher(
+              (HeaderScanCacheKey key, CachedHeaderScanData value) ->
+                  value.pathToLegalArtifact().size() + value.modularHeaders().size() + 1)
+          .build();
+
   /**
    * This method returns null when a required SkyValue is missing and a Skyframe restart is
    * required.
@@ -301,6 +326,12 @@ public final class CcCompilationContext {
   public IncludeScanningHeaderData.Builder createIncludeScanningHeaderData(
       Environment env, boolean usePic, boolean createModularHeaders) throws InterruptedException {
     HeaderInfo headerInfo = getHeaderInfo();
+    HeaderScanCacheKey cacheKey = new HeaderScanCacheKey(headerInfo, usePic, createModularHeaders);
+    CachedHeaderScanData cached = HEADER_SCAN_DATA_CACHE.getIfPresent(cacheKey);
+    if (cached != null) {
+      return new IncludeScanningHeaderData.Builder(
+          cached.pathToLegalArtifact(), cached.modularHeaders());
+    }
     Collection<HeaderInfo> transitiveHeaderInfos = headerInfo.getTransitiveCollection();
     ArrayList<Artifact> treeArtifacts = new ArrayList<>();
     // Summing transitive header lists over-allocates due to duplicate exported deps, and large
@@ -356,6 +387,12 @@ public final class CcCompilationContext {
     removeArtifactsFromSet(modularHeaders, headerInfo.modularPrivateHeaders);
     removeArtifactsFromSet(modularHeaders, headerInfo.textualHeaders);
     removeArtifactsFromSet(modularHeaders, headerInfo.separateModuleHeaders);
+    // Only memoize when no tree artifacts were involved: otherwise the path map depends on
+    // Skyframe-resolved tree contents rather than purely on the header info.
+    if (treeArtifacts.isEmpty()) {
+      HEADER_SCAN_DATA_CACHE.put(
+          cacheKey, new CachedHeaderScanData(pathToLegalArtifact, modularHeaders));
+    }
     return new IncludeScanningHeaderData.Builder(pathToLegalArtifact, modularHeaders);
   }
 
