@@ -20,6 +20,8 @@ import static com.google.devtools.build.lib.actions.ActionAnalysisMetadata.merge
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Preconditions;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableList;
@@ -103,12 +105,14 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.starlark.java.eval.EvalException;
@@ -1306,6 +1310,93 @@ public class CppCompileAction extends AbstractAction
   @Override
   public NestedSet<Artifact> getAllowedDerivedInputs() {
     return allowedDerivedInputs;
+  }
+
+  /**
+   * Memoizes a NestedSet's flattened (exec-path -> derived artifact) map by NestedSet identity.
+   * The big components of {@link #allowedDerivedInputs} (the transitive declared-include-srcs and
+   * module pools) are per-CcCompilationContext objects SHARED by all of a target's compile actions,
+   * so caching their flattened map turns a per-action re-flatten into a per-target one. weakKeys
+   * gives identity comparison and lets entries drop once the owning context is gone. Per-action
+   * components (the source file, mandatory inputs) are deliberately NOT cached here — they are small
+   * and unshared, so {@link #getDerivedInputsForPaths} flattens them transiently.
+   */
+  private static final Cache<NestedSet<Artifact>, ImmutableMap<PathFragment, Artifact>>
+      DERIVED_INPUT_MAP_CACHE = CacheBuilder.newBuilder().weakKeys().build();
+
+  private static ImmutableMap<PathFragment, Artifact> cachedDerivedMap(NestedSet<Artifact> set) {
+    try {
+      // A target's compile actions ask for the same set at once, so load it once for all of them.
+      return DERIVED_INPUT_MAP_CACHE.get(
+          set,
+          () -> {
+            Map<PathFragment, Artifact> map = new HashMap<>();
+            addDerived(map, set);
+            return ImmutableMap.copyOf(map);
+          });
+    } catch (ExecutionException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static void addDerived(Map<PathFragment, Artifact> map, NestedSet<Artifact> set) {
+    for (Artifact artifact : set.toList()) {
+      if (!artifact.isSourceArtifact()) {
+        map.put(artifact.getExecPath(), artifact);
+      }
+    }
+  }
+
+  /**
+   * Overrides {@link Action#getDerivedInputsForPaths} to resolve discovered input paths against
+   * {@link #allowedDerivedInputs} WITHOUT re-flattening it per action. The big shared components are
+   * looked up via {@link #cachedDerivedMap} (flattened once per target); the small per-action
+   * components are flattened transiently. This list MUST stay in sync with the {@code
+   * allowedDerivedInputs} construction in the constructor.
+   */
+  @Override
+  public Map<PathFragment, Artifact> getDerivedInputsForPaths(Collection<PathFragment> execPaths) {
+    ImmutableMap<PathFragment, Artifact> declaredIncludeSrcs =
+        cachedDerivedMap(ccCompilationContext.getDeclaredIncludeSrcs());
+    ImmutableMap<PathFragment, Artifact> transitiveModules =
+        cachedDerivedMap(ccCompilationContext.getTransitiveModules(usePic));
+    ImmutableMap<PathFragment, Artifact> prunableHeaders =
+        cachedDerivedMap(additionalPrunableHeaders);
+
+    Map<PathFragment, Artifact> perAction = null; // built lazily; small and unshared
+    Map<PathFragment, Artifact> result = Maps.newHashMapWithExpectedSize(execPaths.size());
+    for (PathFragment execPath : execPaths) {
+      Artifact artifact = declaredIncludeSrcs.get(execPath);
+      if (artifact == null) {
+        artifact = transitiveModules.get(execPath);
+      }
+      if (artifact == null) {
+        artifact = prunableHeaders.get(execPath);
+      }
+      if (artifact == null) {
+        if (perAction == null) {
+          perAction = new HashMap<>();
+          addDerived(perAction, mandatoryInputs);
+          if (moduleFiles != null) {
+            addDerived(perAction, moduleFiles);
+          }
+          if (!sourceFile.isSourceArtifact()) {
+            perAction.put(sourceFile.getExecPath(), sourceFile);
+          }
+          Artifact separateModule = ccCompilationContext.getSeparateHeaderModule(usePic);
+          if (separateModule != null
+              && !separateModule.isSourceArtifact()
+              && !separateModule.equals(getPrimaryOutput())) {
+            perAction.put(separateModule.getExecPath(), separateModule);
+          }
+        }
+        artifact = perAction.get(execPath);
+      }
+      if (artifact != null) {
+        result.put(execPath, artifact);
+      }
+    }
+    return result;
   }
 
   /**

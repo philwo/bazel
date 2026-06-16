@@ -778,17 +778,16 @@ public class ActionCacheChecker {
     // Note that this method may trigger a violation of the desirable invariant that getInputs()
     // is a superset of getMandatoryInputs(). See bug about an "action not in canonical form"
     // error message and the integration test test_crosstool_change_and_failure().
-    Map<PathFragment, Artifact> allowedDerivedInputsMap = new HashMap<>();
-    for (Artifact derivedInput : action.getAllowedDerivedInputs().toList()) {
-      if (!derivedInput.isSourceArtifact()) {
-        allowedDerivedInputsMap.put(derivedInput.getExecPath(), derivedInput);
-      }
-    }
+    // getDerivedInputsForPaths flattens the action's allowed derived inputs; CppCompileAction
+    // overrides it to answer from per-component maps cached by NestedSet identity, so the large
+    // per-target-shared header pool is not re-flattened for every action on a cache-hit re-check
+    // (the dominant client-CPU cost there: ActionCacheChecker.getCachedInputs -> NestedSet.toList).
+    Map<PathFragment, Artifact> derivedInputs = action.getDerivedInputsForPaths(inputExecPaths);
 
     ImmutableList.Builder<Artifact> inputArtifactsBuilder = ImmutableList.builder();
     List<PathFragment> unresolvedPaths = new ArrayList<>();
     for (PathFragment execPath : inputExecPaths) {
-      Artifact artifact = allowedDerivedInputsMap.get(execPath);
+      Artifact artifact = derivedInputs.get(execPath);
       if (artifact != null) {
         inputArtifactsBuilder.add(artifact);
       } else {

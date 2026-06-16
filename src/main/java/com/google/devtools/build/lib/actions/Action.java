@@ -20,7 +20,10 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ConditionallyThreadCompatible;
 import com.google.devtools.build.lib.vfs.BulkDeleter;
 import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
 
@@ -204,6 +207,35 @@ public interface Action extends ActionExecutionMetadata {
    * in the action cache referring to source artifacts are always resolved.
    */
   NestedSet<Artifact> getAllowedDerivedInputs();
+
+  /**
+   * Resolves {@code execPaths} against this action's {@linkplain #getAllowedDerivedInputs allowed
+   * derived inputs}, returning the subset that correspond to a derived (non-source) allowed input,
+   * each mapped to its artifact. Paths with no derived match are omitted (the caller resolves them
+   * as source artifacts).
+   *
+   * <p>The default flattens the whole allowed-derived set once per call. Actions whose allowed set
+   * is dominated by a large, per-target-shared component (e.g. {@code CppCompileAction}'s
+   * transitive header pool) override this to answer from per-component maps cached by NestedSet
+   * identity, so the shared component is flattened once per target instead of once per action
+   * during action-cache checking.
+   */
+  default Map<PathFragment, Artifact> getDerivedInputsForPaths(Collection<PathFragment> execPaths) {
+    Map<PathFragment, Artifact> allowed = new HashMap<>();
+    for (Artifact derivedInput : getAllowedDerivedInputs().toList()) {
+      if (!derivedInput.isSourceArtifact()) {
+        allowed.put(derivedInput.getExecPath(), derivedInput);
+      }
+    }
+    Map<PathFragment, Artifact> result = new HashMap<>();
+    for (PathFragment execPath : execPaths) {
+      Artifact artifact = allowed.get(execPath);
+      if (artifact != null) {
+        result.put(execPath, artifact);
+      }
+    }
+    return result;
+  }
 
   /**
    * Called on {@linkplain #discoversInputs input-discovering} actions when the inputs of the action
