@@ -139,6 +139,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1425,6 +1426,57 @@ public class GrpcCacheClientTest {
     Status st = Status.fromThrowable(e);
     assertThat(st.getCode()).isEqualTo(Status.Code.DEADLINE_EXCEEDED);
     Mockito.verify(mockBackoff, Mockito.times(1)).nextDelayMillis(any(Exception.class));
+  }
+
+  @Test
+  public void downloadBlob_endlessKeepaliveChunksWithoutData_idleTimeoutCancels() throws Exception {
+    // A server that streams empty keepalive chunks forever (never delivering payload data) must
+    // trip
+    // the idle timeout instead of hanging the build: empty chunks keep the connection warm but do
+    // not count as progress, so the watchdog still fires. Without that, the idle timer would re-arm
+    // on every keepalive and the download would hang indefinitely (this test would time out).
+    Backoff mockBackoff = Mockito.mock(Backoff.class);
+    Mockito.when(mockBackoff.nextDelayMillis(any(Exception.class))).thenReturn(-1L);
+    RemoteOptions remoteOptions =
+        Options.parse(RemoteOptions.class, "--remote_timeout=1s").getOptions();
+    GrpcCacheClient client = newClient(remoteOptions, () -> mockBackoff);
+    Digest digest = DIGEST_UTIL.computeAsUtf8("abcdefg");
+
+    ScheduledExecutorService keepaliveService = Executors.newSingleThreadScheduledExecutor();
+    serviceRegistry.addService(
+        new ByteStreamImplBase() {
+          @Override
+          public void read(ReadRequest request, StreamObserver<ReadResponse> responseObserver) {
+            ServerCallStreamObserver<ReadResponse> serverObserver =
+                (ServerCallStreamObserver<ReadResponse>) responseObserver;
+            AtomicBoolean done = new AtomicBoolean();
+            serverObserver.setOnCancelHandler(() -> done.set(true));
+            // Emit an empty keepalive every 100ms (well within the 1s idle window), forever, until
+            // the client cancels the stream.
+            var unused =
+                keepaliveService.scheduleAtFixedRate(
+                    () -> {
+                      if (done.get()) {
+                        return;
+                      }
+                      try {
+                        responseObserver.onNext(ReadResponse.getDefaultInstance());
+                      } catch (RuntimeException e) {
+                        done.set(true);
+                      }
+                    },
+                    0,
+                    100,
+                    TimeUnit.MILLISECONDS);
+          }
+        });
+
+    try {
+      IOException e = assertThrows(IOException.class, () -> downloadBlob(context, client, digest));
+      assertThat(Status.fromThrowable(e).getCode()).isEqualTo(Status.Code.CANCELLED);
+    } finally {
+      keepaliveService.shutdownNow();
+    }
   }
 
   @Test

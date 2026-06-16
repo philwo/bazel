@@ -56,7 +56,12 @@ public final class RemoteGrpcServiceConfigTest {
                         ImmutableMap.of("service", "google.bytestream.ByteStream"),
                         ImmutableMap.of("service", "build.bazel.remote.asset.v1.Fetch")),
                     "timeout",
-                    "123s")));
+                    "123s"),
+                ImmutableMap.of(
+                    "name",
+                    ImmutableList.of(
+                        ImmutableMap.of(
+                            "service", "google.bytestream.ByteStream", "method", "Read")))));
   }
 
   @Test

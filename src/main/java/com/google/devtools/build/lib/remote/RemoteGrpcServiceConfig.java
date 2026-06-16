@@ -79,7 +79,20 @@ public final class RemoteGrpcServiceConfig {
                     ImmutableMap.of("service", ByteStreamGrpc.SERVICE_NAME),
                     ImmutableMap.of("service", FetchGrpc.SERVICE_NAME)),
                 "timeout",
-                remoteTimeout.toSeconds() + "s")));
+                remoteTimeout.toSeconds() + "s"),
+            // ByteStream.Read carries no per-call deadline: a download's duration
+            // legitimately scales with blob size and available bandwidth.
+            // GrpcCacheClient.requestRead enforces remoteTimeout as an idle timeout
+            // instead. This exact service+method entry takes precedence over the
+            // service-wide entry above.
+            ImmutableMap.of(
+                "name",
+                ImmutableList.of(
+                    ImmutableMap.of(
+                        "service",
+                        ByteStreamGrpc.SERVICE_NAME,
+                        "method",
+                        ByteStreamGrpc.getReadMethod().getBareMethodName())))));
   }
 
   private static ImmutableMap<String, ?> parse(Path serviceConfigPath) throws IOException {

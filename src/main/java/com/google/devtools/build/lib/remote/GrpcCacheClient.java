@@ -50,6 +50,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.authandtls.CallCredentialsProvider;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.remote.RemoteRetrier.ProgressiveBackoff;
@@ -78,6 +79,10 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
@@ -86,6 +91,16 @@ import javax.annotation.Nullable;
 @ThreadSafe
 public class GrpcCacheClient extends RemoteCacheClient implements MissingDigestsFinder {
   private static final GoogleLogger logger = GoogleLogger.forEnclosingClass();
+
+  // Fires the idle-timeout watchdog for in-flight ByteStream.Read downloads (see
+  // requestRead). Shared, daemon, single-threaded: the tasks only check a timestamp
+  // and, at most, cancel a stalled stream, so they never block.
+  private static final ScheduledExecutorService DOWNLOAD_IDLE_TIMEOUT_SCHEDULER =
+      Executors.newSingleThreadScheduledExecutor(
+          new ThreadFactoryBuilder()
+              .setNameFormat("grpc-download-idle-timeout")
+              .setDaemon(true)
+              .build());
 
   private static final class SizeLimitingOutputStream extends OutputStream {
     private final CountingOutputStream out;
@@ -207,6 +222,13 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
   }
 
   private ByteStreamStub bsAsyncStub(RemoteActionExecutionContext context, Channel channel) {
+    // Intentionally no hard call deadline: RemoteGrpcServiceConfig excludes
+    // ByteStream.Read from the generated per-call timeout because the download's
+    // duration legitimately scales with blob size / available bandwidth. A fixed
+    // per-call deadline spuriously cancels large, actively-progressing transfers
+    // (e.g. a multi-GB blob that needs more than remoteTimeout to arrive), forcing a
+    // resume-from-offset retry storm. requestRead() instead enforces remoteTimeout as
+    // an IDLE timeout — it cancels only if no payload data arrives within the window.
     return ByteStreamGrpc.newStub(channel)
         .withInterceptors(
             TracingMetadataUtils.attachMetadataInterceptor(context.getRequestMetadata()),
@@ -558,6 +580,53 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
             new ClientResponseObserver<ReadRequest, ReadResponse>() {
               private volatile ClientCallStreamObserver<ReadRequest> requestStream;
 
+              // Idle-timeout watchdog: the read stub carries no hard call deadline (see
+              // bsAsyncStub), so we cancel the stream only if no payload data arrives within
+              // remoteTimeout. onNext bumps lastDataNanos for non-empty chunks; the watchdog
+              // re-arms itself until the gap exceeds the window. Empty keepalive chunks
+              // deliberately do NOT count as progress, so a server that streams keepalives forever
+              // without ever delivering data still trips the timeout instead of hanging the build.
+              // Disabled when remoteTimeout <= 0.
+              private final long idleTimeoutNanos = options.getRemoteTimeout().toNanos();
+              private volatile long lastDataNanos = System.nanoTime();
+              private volatile ScheduledFuture<?> idleTimeoutFuture;
+
+              private void armIdleTimeout(long delayNanos) {
+                if (idleTimeoutNanos <= 0) {
+                  return;
+                }
+                idleTimeoutFuture =
+                    DOWNLOAD_IDLE_TIMEOUT_SCHEDULER.schedule(
+                        this::checkIdle, delayNanos, TimeUnit.NANOSECONDS);
+              }
+
+              private void checkIdle() {
+                if (future.isDone()) {
+                  return;
+                }
+                long idleNanos = System.nanoTime() - lastDataNanos;
+                if (idleNanos >= idleTimeoutNanos) {
+                  ClientCallStreamObserver<ReadRequest> rs = requestStream;
+                  if (rs != null) {
+                    rs.cancel(
+                        "no data received for "
+                            + options.getRemoteTimeout().toSeconds()
+                            + "s (idle timeout)",
+                        null);
+                  }
+                } else {
+                  // A chunk arrived while we were scheduled; re-arm for the remaining gap.
+                  armIdleTimeout(idleTimeoutNanos - idleNanos);
+                }
+              }
+
+              private void cancelIdleTimeout() {
+                ScheduledFuture<?> f = idleTimeoutFuture;
+                if (f != null) {
+                  f.cancel(false);
+                }
+              }
+
               @Override
               public void beforeStart(ClientCallStreamObserver<ReadRequest> requestStream) {
                 this.requestStream = requestStream;
@@ -568,6 +637,8 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
                       }
                     },
                     MoreExecutors.directExecutor());
+                lastDataNanos = System.nanoTime();
+                armIdleTimeout(idleTimeoutNanos);
               }
 
               @Override
@@ -587,10 +658,18 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
                 }
                 // reset the stall backoff because we've made progress or been kept alive
                 progressiveBackoff.reset();
+                // Only payload chunks count as progress for the idle timeout. Empty keepalive
+                // chunks keep the connection warm but must not extend the window, otherwise an
+                // endless keepalive stream that never delivers data would re-arm the watchdog
+                // forever and hang the download.
+                if (!data.isEmpty()) {
+                  lastDataNanos = System.nanoTime();
+                }
               }
 
               @Override
               public void onError(Throwable t) {
+                cancelIdleTimeout();
                 if (rawOut.getCount() == digest.getSizeBytes()) {
                   // If the file was fully downloaded, it doesn't matter if there was an
                   // error at
@@ -611,6 +690,7 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
 
               @Override
               public void onCompleted() {
+                cancelIdleTimeout();
                 try {
                   try {
                     out.flush();
