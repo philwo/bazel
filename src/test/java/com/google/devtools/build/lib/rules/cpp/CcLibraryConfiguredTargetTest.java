@@ -2666,6 +2666,67 @@ public class CcLibraryConfiguredTargetTest extends BuildViewTestCase {
   }
 
   @Test
+  public void getDerivedInputsForPaths_resolvesTreeArtifactHeaderFromDependency() throws Exception {
+    AnalysisMock.get().ccSupport().setupCcToolchainConfig(mockToolsConfig);
+    scratch.file(
+        "bar/gen_tree.bzl",
+        """
+        load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+        load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+
+        def _impl(ctx):
+            tree = ctx.actions.declare_directory(ctx.label.name + "_headers")
+            ctx.actions.run_shell(outputs = [tree], command = "mkdir -p " + tree.path)
+            return [
+                DefaultInfo(files = depset([tree])),
+                CcInfo(
+                    compilation_context = cc_common.create_compilation_context(
+                        headers = depset([tree]),
+                    ),
+                ),
+            ]
+
+        gen_tree_headers = rule(implementation = _impl)
+        """);
+    scratch.file(
+        "bar/BUILD",
+        """
+        load("@rules_cc//cc:cc_library.bzl", "cc_library")
+        load(":gen_tree.bzl", "gen_tree_headers")
+
+        gen_tree_headers(name = "tree_headers")
+
+        cc_library(
+            name = "consumer",
+            srcs = ["consumer.cc"],
+            deps = [":tree_headers"],
+        )
+        """);
+    scratch.file("bar/consumer.cc", "int f() { return 0; }");
+
+    Artifact treeHeader =
+        getFilesToBuild(getConfiguredTarget("//bar:tree_headers")).toList().get(0);
+    assertThat(treeHeader.isTreeArtifact()).isTrue();
+
+    ConfiguredTarget consumer = getConfiguredTarget("//bar:consumer");
+    CppCompileAction action =
+        actionsTestUtil()
+            .findTransitivePrerequisitesOf(
+                getFilesToBuild(consumer).toList().get(0), CppCompileAction.class)
+            .get(0);
+
+    // The dependency's tree-artifact header flows into the consumer's compilation context
+    // (declaredIncludeSrcs).
+    PathFragment execPath = treeHeader.getExecPath();
+
+    // A header discovered inside a tree artifact is recorded by the tree's own exec path, so
+    // getDerivedInputsForPaths must resolve that exec path back to the tree artifact (matching the
+    // default Action#getDerivedInputsForPaths, which maps tree artifacts too).
+    assertThat(action.getDerivedInputsForPaths(ImmutableList.of(execPath)))
+        .containsExactly(execPath, treeHeader);
+  }
+
+  @Test
   public void testAdditionalCompilerInputsArePassedToCompileFromLocalDefines() throws Exception {
     AnalysisMock.get().ccSupport().setupCcToolchainConfig(mockToolsConfig);
     scratch.file(

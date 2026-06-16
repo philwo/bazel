@@ -40,6 +40,7 @@ import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.ActionWithDiscoveredInputsState;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.DerivedArtifact;
+import com.google.devtools.build.lib.actions.Artifact.TreeArtifact;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.actions.CommandLine;
@@ -1312,30 +1313,62 @@ public class CppCompileAction extends AbstractAction
     return allowedDerivedInputs;
   }
 
-  /**
-   * Memoizes a NestedSet's flattened (exec-path -> derived artifact) map by NestedSet identity.
-   * The big components of {@link #allowedDerivedInputs} (the transitive declared-include-srcs and
-   * module pools) are per-CcCompilationContext objects SHARED by all of a target's compile actions,
-   * so caching their flattened map turns a per-action re-flatten into a per-target one. weakKeys
-   * gives identity comparison and lets entries drop once the owning context is gone. Per-action
-   * components (the source file, mandatory inputs) are deliberately NOT cached here — they are small
-   * and unshared, so {@link #getDerivedInputsForPaths} flattens them transiently.
-   */
-  private static final Cache<NestedSet<Artifact>, ImmutableMap<PathFragment, Artifact>>
-      DERIVED_INPUT_MAP_CACHE = CacheBuilder.newBuilder().weakKeys().build();
+  /** The flattened derived (exec-path -> artifact) maps of a NestedSet, regular and tree split. */
+  private record ComponentMaps(
+      ImmutableMap<PathFragment, Artifact> regular,
+      ImmutableMap<PathFragment, TreeArtifact> tree) {}
 
-  private static ImmutableMap<PathFragment, Artifact> cachedDerivedMap(NestedSet<Artifact> set) {
+  /**
+   * Memoizes a NestedSet's flattened derived-artifact maps (regular and tree, keyed by exec path)
+   * by NestedSet identity. The big components of {@link #allowedDerivedInputs} (the transitive
+   * declared-include-srcs and module pools) are per-CcCompilationContext objects SHARED by all of a
+   * target's compile actions, so caching their flattened maps turns a per-action re-flatten into a
+   * per-target one (used by both {@link #getDerivedInputsForPaths} and header discovery — the
+   * per-action re-flatten was the dominant transient-allocation source on large builds). weakKeys
+   * gives identity comparison and lets entries drop once the owning context is gone; maximumWeight
+   * bounds the retained size so it cannot grow without limit. Per-action components (the source
+   * file, mandatory inputs) are deliberately NOT cached here — they are small and unshared, so
+   * callers flatten them transiently.
+   */
+  private static final Cache<NestedSet<Artifact>, ComponentMaps> DERIVED_INPUT_MAP_CACHE =
+      CacheBuilder.newBuilder()
+          .weakKeys()
+          .maximumWeight(20_000_000)
+          .weigher(
+              (NestedSet<Artifact> key, ComponentMaps value) ->
+                  value.regular().size() + value.tree().size())
+          .build();
+
+  private static ComponentMaps cachedComponentMaps(NestedSet<Artifact> set) {
     try {
       // A target's compile actions ask for the same set at once, so load it once for all of them.
       return DERIVED_INPUT_MAP_CACHE.get(
           set,
           () -> {
-            Map<PathFragment, Artifact> map = new HashMap<>();
-            addDerived(map, set);
-            return ImmutableMap.copyOf(map);
+            Map<PathFragment, Artifact> regular = new HashMap<>();
+            Map<PathFragment, TreeArtifact> tree = new HashMap<>();
+            addComponent(set, regular, tree);
+            return new ComponentMaps(ImmutableMap.copyOf(regular), ImmutableMap.copyOf(tree));
           });
     } catch (ExecutionException e) {
       throw new IllegalStateException(e);
+    }
+  }
+
+  /** Splits a NestedSet's derived artifacts into regular and tree maps, keyed by exec path. */
+  private static void addComponent(
+      NestedSet<Artifact> set,
+      Map<PathFragment, Artifact> regular,
+      Map<PathFragment, TreeArtifact> tree) {
+    for (Artifact artifact : set.toList()) {
+      if (artifact.isSourceArtifact()) {
+        continue;
+      }
+      if (artifact.isTreeArtifact()) {
+        tree.putIfAbsent(artifact.getExecPath(), (TreeArtifact) artifact);
+      } else {
+        regular.putIfAbsent(artifact.getExecPath(), artifact);
+      }
     }
   }
 
@@ -1347,31 +1380,122 @@ public class CppCompileAction extends AbstractAction
     }
   }
 
+  /** The (regular-artifact resolver, tree-artifact map) inputs that header discovery needs. */
+  private record HeaderDiscoveryInputs(
+      HeaderDiscovery.DerivedArtifactResolver resolver,
+      Map<PathFragment, TreeArtifact> treeArtifacts) {}
+
+  /**
+   * Builds the inputs {@link HeaderDiscovery} needs to resolve discovered headers, WITHOUT
+   * re-flattening {@link #allowedDerivedInputs} per action. Mirrors {@link
+   * #getDerivedInputsForPaths} (and MUST stay in sync with the {@code allowedDerivedInputs}
+   * construction in the constructor): the big shared components are resolved against the per-target
+   * cached maps; the small per-action components are flattened here. Under a non-noop {@link
+   * PathMapper} the cache (keyed on unmapped exec paths) does not apply, so we fall back to
+   * flattening once with the mapper.
+   */
+  private HeaderDiscoveryInputs headerDiscoveryInputs(PathMapper pathMapper) {
+    if (!pathMapper.isNoop()) {
+      Map<PathFragment, Artifact> regular = new HashMap<>();
+      Map<PathFragment, TreeArtifact> tree = new HashMap<>();
+      for (Artifact a : allowedDerivedInputs.toList()) {
+        if (a.isSourceArtifact()) {
+          continue;
+        }
+        if (a.isTreeArtifact()) {
+          tree.putIfAbsent(pathMapper.map(a.getExecPath()), (TreeArtifact) a);
+        } else {
+          regular.putIfAbsent(pathMapper.map(a.getExecPath()), a);
+        }
+      }
+      return new HeaderDiscoveryInputs(regular::get, tree);
+    }
+
+    ComponentMaps declaredIncludeSrcs =
+        cachedComponentMaps(ccCompilationContext.getDeclaredIncludeSrcs());
+    ComponentMaps transitiveModules =
+        cachedComponentMaps(ccCompilationContext.getTransitiveModules(usePic));
+    ComponentMaps prunableHeaders = cachedComponentMaps(additionalPrunableHeaders);
+
+    Map<PathFragment, Artifact> perActionRegular = new HashMap<>();
+    Map<PathFragment, TreeArtifact> treeArtifacts = new HashMap<>();
+    addComponent(mandatoryInputs, perActionRegular, treeArtifacts);
+    if (moduleFiles != null) {
+      addComponent(moduleFiles, perActionRegular, treeArtifacts);
+    }
+    if (!sourceFile.isSourceArtifact()) {
+      perActionRegular.putIfAbsent(sourceFile.getExecPath(), sourceFile);
+    }
+    Artifact separateModule = ccCompilationContext.getSeparateHeaderModule(usePic);
+    if (separateModule != null
+        && !separateModule.isSourceArtifact()
+        && !separateModule.equals(getPrimaryOutput())) {
+      if (separateModule.isTreeArtifact()) {
+        treeArtifacts.putIfAbsent(separateModule.getExecPath(), (TreeArtifact) separateModule);
+      } else {
+        perActionRegular.putIfAbsent(separateModule.getExecPath(), separateModule);
+      }
+    }
+    // Tree artifacts from the shared components (usually empty/tiny); merge into the per-action
+    // map.
+    declaredIncludeSrcs.tree().forEach(treeArtifacts::putIfAbsent);
+    transitiveModules.tree().forEach(treeArtifacts::putIfAbsent);
+    prunableHeaders.tree().forEach(treeArtifacts::putIfAbsent);
+
+    HeaderDiscovery.DerivedArtifactResolver resolver =
+        execPath -> {
+          Artifact a = declaredIncludeSrcs.regular().get(execPath);
+          if (a == null) {
+            a = transitiveModules.regular().get(execPath);
+          }
+          if (a == null) {
+            a = prunableHeaders.regular().get(execPath);
+          }
+          if (a == null) {
+            a = perActionRegular.get(execPath);
+          }
+          return a;
+        };
+    return new HeaderDiscoveryInputs(resolver, treeArtifacts);
+  }
+
   /**
    * Overrides {@link Action#getDerivedInputsForPaths} to resolve discovered input paths against
-   * {@link #allowedDerivedInputs} WITHOUT re-flattening it per action. The big shared components are
-   * looked up via {@link #cachedDerivedMap} (flattened once per target); the small per-action
-   * components are flattened transiently. This list MUST stay in sync with the {@code
+   * {@link #allowedDerivedInputs} WITHOUT re-flattening it per action. The big shared components
+   * are looked up via {@link #cachedComponentMaps} (flattened once per target); the small
+   * per-action components are flattened transiently. This list MUST stay in sync with the {@code
    * allowedDerivedInputs} construction in the constructor.
    */
   @Override
   public Map<PathFragment, Artifact> getDerivedInputsForPaths(Collection<PathFragment> execPaths) {
-    ImmutableMap<PathFragment, Artifact> declaredIncludeSrcs =
-        cachedDerivedMap(ccCompilationContext.getDeclaredIncludeSrcs());
-    ImmutableMap<PathFragment, Artifact> transitiveModules =
-        cachedDerivedMap(ccCompilationContext.getTransitiveModules(usePic));
-    ImmutableMap<PathFragment, Artifact> prunableHeaders =
-        cachedDerivedMap(additionalPrunableHeaders);
+    ComponentMaps declaredIncludeSrcs =
+        cachedComponentMaps(ccCompilationContext.getDeclaredIncludeSrcs());
+    ComponentMaps transitiveModules =
+        cachedComponentMaps(ccCompilationContext.getTransitiveModules(usePic));
+    ComponentMaps prunableHeaders = cachedComponentMaps(additionalPrunableHeaders);
 
     Map<PathFragment, Artifact> perAction = null; // built lazily; small and unshared
     Map<PathFragment, Artifact> result = Maps.newHashMapWithExpectedSize(execPaths.size());
     for (PathFragment execPath : execPaths) {
-      Artifact artifact = declaredIncludeSrcs.get(execPath);
+      // Resolve against the big shared components — regular artifacts first, then tree artifacts
+      // (keyed by their own exec path, matching the default Action#getDerivedInputsForPaths) — and
+      // finally the small per-action components. addDerived already folds per-action tree artifacts
+      // into perAction.
+      Artifact artifact = declaredIncludeSrcs.regular().get(execPath);
       if (artifact == null) {
-        artifact = transitiveModules.get(execPath);
+        artifact = transitiveModules.regular().get(execPath);
       }
       if (artifact == null) {
-        artifact = prunableHeaders.get(execPath);
+        artifact = prunableHeaders.regular().get(execPath);
+      }
+      if (artifact == null) {
+        artifact = declaredIncludeSrcs.tree().get(execPath);
+      }
+      if (artifact == null) {
+        artifact = transitiveModules.tree().get(execPath);
+      }
+      if (artifact == null) {
+        artifact = prunableHeaders.tree().get(execPath);
       }
       if (artifact == null) {
         if (perAction == null) {
@@ -1957,6 +2081,7 @@ public class CppCompileAction extends AbstractAction
       DetailedExitCode code = createDetailedExitCode(message, Code.FIND_USED_HEADERS_IO_EXCEPTION);
       throw new ActionExecutionException(message, this, /* catastrophe= */ false, code);
     }
+    HeaderDiscoveryInputs hdInputs = headerDiscoveryInputs(pathMapper);
     return HeaderDiscovery.discoverInputsFromDependencies(
         this,
         getSourceFile(),
@@ -1966,7 +2091,8 @@ public class CppCompileAction extends AbstractAction
             .addAll(stderrDeps)
             .build(),
         getPermittedSystemIncludePrefixes(execRoot),
-        getAllowedDerivedInputs(),
+        hdInputs.resolver(),
+        hdInputs.treeArtifacts(),
         execRoot,
         artifactResolver,
         pathMapper);
@@ -1981,13 +2107,15 @@ public class CppCompileAction extends AbstractAction
       PathMapper pathMapper)
       throws ActionExecutionException {
     Preconditions.checkNotNull(getDotdFile(), "Trying to scan .d file which is unset");
+    HeaderDiscoveryInputs hdInputs = headerDiscoveryInputs(pathMapper);
     return HeaderDiscovery.discoverInputsFromDependencies(
         this,
         getSourceFile(),
         needsIncludeValidation,
         processDepset(actionExecutionContext, execRoot, dotDContents).getDependencies(),
         getPermittedSystemIncludePrefixes(execRoot),
-        getAllowedDerivedInputs(),
+        hdInputs.resolver(),
+        hdInputs.treeArtifacts(),
         execRoot,
         artifactResolver,
         pathMapper);
