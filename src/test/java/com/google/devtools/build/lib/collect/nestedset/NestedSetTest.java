@@ -73,6 +73,49 @@ public final class NestedSetTest {
   }
 
   @Test
+  public void forEachElement_empty() {
+    List<String> collected = new ArrayList<>();
+    NestedSetTest.<String>nestedSetBuilder().build().forEachElement(collected::add);
+    assertThat(collected).isEmpty();
+  }
+
+  @Test
+  public void forEachElement_singleton() {
+    List<String> collected = new ArrayList<>();
+    nestedSetBuilder("a").build().forEachElement(collected::add);
+    assertThat(collected).containsExactly("a");
+  }
+
+  @Test
+  public void forEachElement_visitsAllElementsOfNestedSet() {
+    NestedSet<String> b = nestedSetBuilder("b1", "b2").build();
+    NestedSet<String> c = nestedSetBuilder("c1", "c2").build();
+    NestedSet<String> set = nestedSetBuilder("a").addTransitive(b).addTransitive(c).build();
+
+    List<String> collected = new ArrayList<>();
+    set.forEachElement(collected::add);
+
+    assertThat(collected).containsExactlyElementsIn(set.toList());
+  }
+
+  @Test
+  public void forEachElement_visitsSharedSubgraphElementsOnce() {
+    // left and right both addTransitive(shared), so both reference shared's child array by
+    // identity;
+    // forEachElement must dedup that array and visit s1/s2 once, matching toList.
+    NestedSet<String> shared = nestedSetBuilder("s1", "s2").build();
+    NestedSet<String> left = nestedSetBuilder("l").addTransitive(shared).build();
+    NestedSet<String> right = nestedSetBuilder("r").addTransitive(shared).build();
+    NestedSet<String> root =
+        NestedSetTest.<String>nestedSetBuilder().addTransitive(left).addTransitive(right).build();
+
+    List<String> collected = new ArrayList<>();
+    root.forEachElement(collected::add);
+
+    assertThat(collected).containsExactlyElementsIn(root.toList());
+  }
+
+  @Test
   public void flatToString() {
     assertThat(nestedSetBuilder().build().toString()).isEqualTo("[]");
     assertThat(nestedSetBuilder("a").build().toString()).isEqualTo("[a]");

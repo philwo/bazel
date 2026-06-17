@@ -52,6 +52,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
 /**
@@ -838,6 +839,52 @@ public abstract sealed class NestedSet<E> {
       }
     }
     return res.build();
+  }
+
+  /**
+   * Invokes {@code action} on each leaf element reachable from this set, performing a depth-first
+   * traversal of the underlying DAG and visiting each shared subgraph only once (deduped by node
+   * identity).
+   *
+   * <p>Unlike {@link #toList}, this builds no intermediate collection of the elements, so it is
+   * suited to hot paths that retain only a small, filtered subset (e.g. discarding source artifacts
+   * from a large mostly-source pool). The trade-off is that an individual element is <b>not</b>
+   * deduplicated across distinct nodes: if the same element is reachable via two different graph
+   * nodes it is passed to {@code action} twice. Callers needing per-element uniqueness must dedup
+   * themselves (e.g. via a map keyed on some property of the element).
+   *
+   * <p>The traversal order is unspecified and, in particular, is not reversed for {@link
+   * Order#LINK_ORDER} sets.
+   */
+  @SuppressWarnings("unchecked")
+  public void forEachElement(Consumer<? super E> action) {
+    Object children = getChildrenUninterruptibly();
+    if (!(children instanceof Object[] array)) {
+      // A non-array is a singleton element; an empty set is an (empty) Object[], handled below.
+      action.accept((E) children);
+      return;
+    }
+    VisitedArraySet arrays = new VisitedArraySet();
+    arrays.add(array);
+    walkElements(arrays, action, array);
+  }
+
+  /**
+   * Performs a depth-first traversal of {@code children}, tracking visited arrays in {@code arrays}
+   * and invoking {@code action} on each leaf. Like {@link #walk}, but streams leaves to a consumer
+   * instead of collecting them into a deduplicating set.
+   */
+  @SuppressWarnings("unchecked")
+  private void walkElements(VisitedArraySet arrays, Consumer<? super E> action, Object[] children) {
+    for (Object child : children) {
+      if (child instanceof Object[] array) {
+        if (arrays.add(array)) {
+          walkElements(arrays, action, array);
+        }
+      } else {
+        action.accept((E) child);
+      }
+    }
   }
 
   /**

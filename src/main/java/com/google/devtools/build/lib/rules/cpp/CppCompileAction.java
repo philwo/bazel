@@ -1355,20 +1355,35 @@ public class CppCompileAction extends AbstractAction
     }
   }
 
-  /** Splits a NestedSet's derived artifacts into regular and tree maps, keyed by exec path. */
+  /**
+   * Splits a NestedSet's derived artifacts into regular and tree maps, keyed by exec path.
+   *
+   * <p>Streams the set's elements via {@link NestedSet#forEachElement} (an allocation-free DAG
+   * traversal) rather than {@code set.toList()}. On a large C++ build the declared-include-srcs
+   * pool is ~150k artifacts that are mostly source (kept out of these maps), and {@code toList()}
+   * builds a transient ~150k-element dedup set of ALL of them just to discard the source ones —
+   * that dedup was the dominant CPU/allocation here. The streaming traversal allocates nothing per
+   * element; the maps dedup the kept (derived) artifacts by exec path, producing an identical
+   * result.
+   */
   private static void addComponent(
       NestedSet<Artifact> set,
       Map<PathFragment, Artifact> regular,
       Map<PathFragment, TreeArtifact> tree) {
-    for (Artifact artifact : set.toList()) {
-      if (artifact.isSourceArtifact()) {
-        continue;
-      }
-      if (artifact.isTreeArtifact()) {
-        tree.putIfAbsent(artifact.getExecPath(), (TreeArtifact) artifact);
-      } else {
-        regular.putIfAbsent(artifact.getExecPath(), artifact);
-      }
+    set.forEachElement(artifact -> addDerivedLeaf(artifact, regular, tree));
+  }
+
+  private static void addDerivedLeaf(
+      Artifact artifact,
+      Map<PathFragment, Artifact> regular,
+      Map<PathFragment, TreeArtifact> tree) {
+    if (artifact.isSourceArtifact()) {
+      return;
+    }
+    if (artifact.isTreeArtifact()) {
+      tree.putIfAbsent(artifact.getExecPath(), (TreeArtifact) artifact);
+    } else {
+      regular.putIfAbsent(artifact.getExecPath(), artifact);
     }
   }
 
