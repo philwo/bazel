@@ -42,8 +42,10 @@ import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyValue;
 import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.AbstractCollection;
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -295,28 +297,196 @@ public final class CcCompilationContext {
     }
   }
 
-  /** The path map and modular header set used to seed include scanning for a header info. */
-  private record CachedHeaderScanData(
-      Map<PathFragment, Artifact> pathToLegalArtifact, Set<Artifact> modularHeaders) {}
+  // A flat per-target path map is ~130-250k entries and, with thousands of distinct header infos,
+  // builds billions of CompactHashMap entries over a full Chromium build, too many to cache. The
+  // layered representation below exploits the structure HeaderInfo.flatten() already computes —
+  // `largestDep` (shared by reference) + `additionalDeps` (delta). Each node stores only its delta
+  // entries and points at largestDep's node; lookups walk own -> parent. Memory is O(unique
+  // headers), not O(targets x closure), so every node caches without thrashing. Lookup depth is
+  // bounded by materializing a full flat map every HEADER_SCAN_FLATTEN_THRESHOLD delta hops (a
+  // skip-list over the largestDep spine), so get() stays cheap. The map is independent of
+  // usePic/createModularHeaders, so nodes are keyed on HeaderInfo alone. The fast path requires a
+  // tree-artifact-free closure; otherwise it bails (buildNode returns null) to the original flat
+  // path, which resolves tree artifacts via Skyframe.
+  // Worst-case lookup-depth bound. Set high enough that real largestDep spines never reach it (so
+  // the
+  // structural-sharing allocation win is preserved), but finite to cap lookup cost on adversarial
+  // graphs (a deep spine would otherwise make a miss walk every node).
+  private static final int HEADER_SCAN_FLATTEN_THRESHOLD = 256;
 
-  private record HeaderScanCacheKey(
-      HeaderInfo headerInfo, boolean usePic, boolean createModularHeaders) {}
+  // weakKeys() ties each cached node's lifetime to its HeaderInfo key: once analysis drops the
+  // HeaderInfo (e.g. after a build), the entry becomes collectable instead of pinning the header's
+  // Artifact graph for the whole server lifetime. weakKeys() also switches key lookups from
+  // value-equality (HeaderInfo.equals via identityToken) to identity (==); within a build the same
+  // HeaderInfo instance is shared across dependent compile actions, so identity hits still hold.
+  private static final Cache<HeaderInfo, HeaderScanNode> HEADER_SCAN_NODE_CACHE =
+      CacheBuilder.newBuilder().weakKeys().maximumSize(500_000).build();
+
+  /** A layered node of the include-scanning path map for one HeaderInfo. */
+  private static final class HeaderScanNode {
+    // Delta entries (this header info's own headers + additionalDeps' own headers). Null iff this
+    // is
+    // a materialized (flat) node.
+    @Nullable private final Map<PathFragment, Artifact> ownMap;
+    @Nullable private final HeaderScanNode parent; // largestDep's node
+    private final int depthFromFlat; // delta probes before a flat node / null; 0 for a flat node
+    @Nullable private final Map<PathFragment, Artifact> flatMap; // non-null iff materialized
+
+    HeaderScanNode(
+        @Nullable Map<PathFragment, Artifact> ownMap,
+        @Nullable HeaderScanNode parent,
+        int depthFromFlat,
+        @Nullable Map<PathFragment, Artifact> flatMap) {
+      this.ownMap = ownMap;
+      this.parent = parent;
+      this.depthFromFlat = depthFromFlat;
+      this.flatMap = flatMap;
+    }
+
+    @Nullable
+    Artifact lookup(PathFragment path) {
+      HeaderScanNode n = this;
+      while (n != null) {
+        if (n.flatMap != null) {
+          return n.flatMap.get(path);
+        }
+        Artifact a = n.ownMap.get(path);
+        if (a != null) {
+          return a;
+        }
+        n = n.parent;
+      }
+      return null;
+    }
+  }
+
+  /** A lookup-only {@link Map} view over a {@link HeaderScanNode} spine. */
+  private static final class LayeredPathMap extends AbstractMap<PathFragment, Artifact> {
+    private final HeaderScanNode node;
+
+    LayeredPathMap(HeaderScanNode node) {
+      this.node = node;
+    }
+
+    @Override
+    @Nullable
+    public Artifact get(Object key) {
+      return key instanceof PathFragment path ? node.lookup(path) : null;
+    }
+
+    @Override
+    public boolean containsKey(Object key) {
+      return key instanceof PathFragment path && node.lookup(path) != null;
+    }
+
+    @Override
+    public Set<Entry<PathFragment, Artifact>> entrySet() {
+      throw new UnsupportedOperationException("LayeredPathMap is lookup-only");
+    }
+  }
+
+  @Nullable
+  private static HeaderScanNode getOrBuildHeaderScanNode(HeaderInfo headerInfo) {
+    HeaderScanNode node = HEADER_SCAN_NODE_CACHE.getIfPresent(headerInfo);
+    if (node != null) {
+      return node;
+    }
+    node = buildHeaderScanNode(headerInfo);
+    if (node != null) {
+      // Idempotent: a benign race may build twice; either result is correct.
+      HEADER_SCAN_NODE_CACHE.put(headerInfo, node);
+    }
+    return node;
+  }
+
+  /** Returns null (bail to the flat fallback) if any header in the delta is a tree artifact. */
+  @Nullable
+  private static HeaderScanNode buildHeaderScanNode(HeaderInfo headerInfo) {
+    HeaderInfo largestDep;
+    ImmutableList<HeaderInfo> additionalDeps;
+    if (headerInfo.deps.isEmpty()) {
+      largestDep = null;
+      additionalDeps = ImmutableList.of();
+    } else {
+      HeaderInfo.TransitiveHeaderCollection tc =
+          (HeaderInfo.TransitiveHeaderCollection) headerInfo.getTransitiveCollection();
+      largestDep = tc.largestDep;
+      additionalDeps = tc.additionalDeps;
+    }
+    Map<PathFragment, Artifact> delta = new HashMap<>();
+    if (!addOwnHeadersForScanning(headerInfo, delta)) {
+      return null;
+    }
+    for (int i = 0; i < additionalDeps.size(); i++) {
+      if (!addOwnHeadersForScanning(additionalDeps.get(i), delta)) {
+        return null;
+      }
+    }
+    HeaderScanNode parentNode = null;
+    if (largestDep != null) {
+      parentNode = getOrBuildHeaderScanNode(largestDep);
+      if (parentNode == null) {
+        return null; // parent closure has tree artifacts -> bail
+      }
+    }
+    int depth =
+        (parentNode == null) ? 1 : (parentNode.flatMap != null ? 1 : parentNode.depthFromFlat + 1);
+    if (depth >= HEADER_SCAN_FLATTEN_THRESHOLD) {
+      Map<PathFragment, Artifact> flat = new HashMap<>(delta);
+      for (HeaderScanNode n = parentNode; n != null; ) {
+        if (n.flatMap != null) {
+          flat.putAll(n.flatMap);
+          break;
+        }
+        flat.putAll(n.ownMap);
+        n = n.parent;
+      }
+      return new HeaderScanNode(null, null, 0, flat);
+    }
+    return new HeaderScanNode(delta, parentNode, depth, null);
+  }
+
+  /** Adds a header info's own (non-transitive) headers; returns false on a tree artifact. */
+  private static boolean addOwnHeadersForScanning(
+      HeaderInfo headerInfo, Map<PathFragment, Artifact> out) {
+    return addHeadersForScanning(headerInfo.modularPublicHeaders, out)
+        && addHeadersForScanning(headerInfo.modularPrivateHeaders, out)
+        && addHeadersForScanning(headerInfo.separateModuleHeaders, out)
+        && addHeadersForScanning(headerInfo.textualHeaders, out);
+  }
+
+  private static boolean addHeadersForScanning(
+      ImmutableList<Artifact> headers, Map<PathFragment, Artifact> out) {
+    for (int i = 0; i < headers.size(); i++) {
+      Artifact a = headers.get(i);
+      if (a.isTreeArtifact()) {
+        return false;
+      }
+      out.put(a.getExecPath(), a);
+    }
+    return true;
+  }
 
   /**
-   * Memoizes the include-scanning path map and modular-header set per header info (keyed by header
-   * info identity plus the two boolean knobs). With a global header pool, these are the same
-   * ~130k-entry map rebuilt for every compile action that shares a CcCompilationContext, which
-   * dominated client CPU (CompactHashMap.put) on cache-hit remote builds. Only memoized when no tree
-   * artifacts are present, since otherwise the result depends on Skyframe-resolved tree contents.
-   * Bounded by total entry count so memory stays in check.
+   * Builds the modular-header set (only used when createModularHeaders is true, which is rare for
+   * module-free builds). Mirrors the original: union of modular headers from transitive header
+   * infos that build a module, minus this target's own headers.
    */
-  private static final Cache<HeaderScanCacheKey, CachedHeaderScanData> HEADER_SCAN_DATA_CACHE =
-      CacheBuilder.newBuilder()
-          .maximumWeight(40_000_000)
-          .weigher(
-              (HeaderScanCacheKey key, CachedHeaderScanData value) ->
-                  value.pathToLegalArtifact().size() + value.modularHeaders().size() + 1)
-          .build();
+  private Set<Artifact> buildModularHeaders(HeaderInfo headerInfo, boolean usePic) {
+    Set<Artifact> modularHeaders = CompactHashSet.create();
+    for (HeaderInfo transitiveHeaderInfo : headerInfo.getTransitiveCollection()) {
+      if (transitiveHeaderInfo.getModule(usePic) != null) {
+        modularHeaders.addAll(transitiveHeaderInfo.modularPublicHeaders);
+        modularHeaders.addAll(transitiveHeaderInfo.modularPrivateHeaders);
+        modularHeaders.addAll(transitiveHeaderInfo.separateModuleHeaders);
+      }
+    }
+    removeArtifactsFromSet(modularHeaders, headerInfo.modularPublicHeaders);
+    removeArtifactsFromSet(modularHeaders, headerInfo.modularPrivateHeaders);
+    removeArtifactsFromSet(modularHeaders, headerInfo.textualHeaders);
+    removeArtifactsFromSet(modularHeaders, headerInfo.separateModuleHeaders);
+    return modularHeaders;
+  }
 
   /**
    * This method returns null when a required SkyValue is missing and a Skyframe restart is
@@ -326,12 +496,15 @@ public final class CcCompilationContext {
   public IncludeScanningHeaderData.Builder createIncludeScanningHeaderData(
       Environment env, boolean usePic, boolean createModularHeaders) throws InterruptedException {
     HeaderInfo headerInfo = getHeaderInfo();
-    HeaderScanCacheKey cacheKey = new HeaderScanCacheKey(headerInfo, usePic, createModularHeaders);
-    CachedHeaderScanData cached = HEADER_SCAN_DATA_CACHE.getIfPresent(cacheKey);
-    if (cached != null) {
-      return new IncludeScanningHeaderData.Builder(
-          cached.pathToLegalArtifact(), cached.modularHeaders());
+    // Fast path: structurally-shared layered path map (tree-artifact-free closures only; the map is
+    // independent of usePic/createModularHeaders).
+    HeaderScanNode scanNode = getOrBuildHeaderScanNode(headerInfo);
+    if (scanNode != null) {
+      Set<Artifact> modularHeaders =
+          createModularHeaders ? buildModularHeaders(headerInfo, usePic) : ImmutableSet.of();
+      return new IncludeScanningHeaderData.Builder(new LayeredPathMap(scanNode), modularHeaders);
     }
+    // The closure has tree artifacts, whose contents Skyframe resolves: build the flat map.
     Collection<HeaderInfo> transitiveHeaderInfos = headerInfo.getTransitiveCollection();
     ArrayList<Artifact> treeArtifacts = new ArrayList<>();
     // Summing transitive header lists over-allocates due to duplicate exported deps, and large
@@ -387,12 +560,6 @@ public final class CcCompilationContext {
     removeArtifactsFromSet(modularHeaders, headerInfo.modularPrivateHeaders);
     removeArtifactsFromSet(modularHeaders, headerInfo.textualHeaders);
     removeArtifactsFromSet(modularHeaders, headerInfo.separateModuleHeaders);
-    // Only memoize when no tree artifacts were involved: otherwise the path map depends on
-    // Skyframe-resolved tree contents rather than purely on the header info.
-    if (treeArtifacts.isEmpty()) {
-      HEADER_SCAN_DATA_CACHE.put(
-          cacheKey, new CachedHeaderScanData(pathToLegalArtifact, modularHeaders));
-    }
     return new IncludeScanningHeaderData.Builder(pathToLegalArtifact, modularHeaders);
   }
 
