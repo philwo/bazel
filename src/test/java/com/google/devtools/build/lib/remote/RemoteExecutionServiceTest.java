@@ -846,8 +846,9 @@ public class RemoteExecutionServiceTest {
       var previousRoots = new ArrayList<>();
       long stableRetainedSize = -1;
       while (true) {
+        // Each tree gets its own service, so that it shares no cached directory blobs with others.
         var merkleTree =
-            service
+            newRemoteExecutionService(remoteOptions)
                 .buildRemoteAction(spawn, context, MerkleTreeComputer.BlobPolicy.KEEP)
                 .getMerkleTree();
         assertThat(merkleTree).isInstanceOf(MerkleTree.Uploadable.class);
@@ -868,13 +869,14 @@ public class RemoteExecutionServiceTest {
       //        18       181      3264   [B
       //         9        32       288   b.b.r.e.v2.Digest
       //         2       112       224   [Ljava.lang.Object;
-      //         9        16       144   c.g.p.ByteString$LiteralByteString
+      //         5        16        80   c.g.p.ByteString$LiteralByteString
+      //         4        24        96   java.lang.String
       //         1        24        24   c.g.c.c.ImmutableSortedMap
       //         2        16        32   c.g.c.c.RegularImmutableList
       //         1        32        32   c.g.d.b.l.r.m.MerkleTree$RootOnly$BlobsUploaded
       //         1        24        24   c.g.c.c.RegularImmutableSortedSet
       //         1        16        16   c.g.d.b.l.r.m.MerkleTree$Uploadable
-      //        44                4048   (total)
+      //        44                4080   (total)
       //
       // Ignoring objects with constant count, the footprint is made up of:
       // * the two Object arrays backing the ImmutableSortedMap that tracks a map from digest-like
@@ -895,7 +897,7 @@ public class RemoteExecutionServiceTest {
       // TODO: Get this number down.
       // NOTE: Don't just increase this number if the test fails, it directly corresponds to the
       // memory usage of Bazel's (but not Blaze's) remote execution implementation.
-      assertThat(stableRetainedSize).isEqualTo(4048);
+      assertThat(stableRetainedSize).isEqualTo(4080);
     }
   }
 

@@ -192,6 +192,31 @@ public final class MerkleTreeComputer {
       inFlightComputations = new TaskDeduplicator<>();
   private final AtomicLong inFlightComputationSequence = new AtomicLong();
 
+  // Per-build cache of (directory blob, digest) keyed on the built Directory proto (protobuf
+  // value-equality, so exact — no hash collisions). Most directories of a big shared header pool
+  // (e.g. third_party/.../absl/strings/) are byte-identical across the thousands of compile actions
+  // that consume the pool, yet buildWithPrecomputedSubTrees re-serializes + re-digests them per
+  // action. Caching skips toByteArray() + SHA-256 + the byte[] allocation on the repeats. Instance
+  // (not static) so it is tied to this build's digestUtil and discarded with the computer.
+  private record DirectoryBlob(Digest digest, byte[] blob) {}
+
+  // Cap the cache by retained blob bytes rather than entry count: a few large directory blobs would
+  // otherwise make peak memory unpredictable. The weight counts the cached byte[]; the Directory
+  // key
+  // retains roughly as much again, so true retention is about twice this bound.
+  private static final long MAX_DIRECTORY_BLOB_CACHE_BYTES = 512L * 1024 * 1024;
+
+  private final Cache<Directory, DirectoryBlob> directoryBlobCache =
+      Caffeine.newBuilder()
+          .maximumWeight(MAX_DIRECTORY_BLOB_CACHE_BYTES)
+          .weigher((Directory key, DirectoryBlob value) -> value.blob().length)
+          .build();
+
+  private DirectoryBlob computeDirectoryBlob(Directory directory) {
+    byte[] blob = directory.toByteArray();
+    return new DirectoryBlob(digestUtil.compute(blob), blob);
+  }
+
   public MerkleTreeComputer(
       DigestUtil digestUtil,
       @Nullable MerkleTreeUploader remoteExecutionCache,
@@ -795,10 +820,10 @@ public final class MerkleTreeComputer {
   private Digest computeDirectoryDigest(
       Directory directory, @Nullable byte[][] discardScratch, @Nullable Map<Object, Object> blobs) {
     if (discardScratch == null) {
-      byte[] directoryBlob = directory.toByteArray();
-      Digest digest = digestUtil.compute(directoryBlob);
+      DirectoryBlob directoryBlob = directoryBlobCache.get(directory, this::computeDirectoryBlob);
+      Digest digest = directoryBlob.digest();
       if (digest.getSizeBytes() != 0) {
-        blobs.putIfAbsent(digest, directoryBlob);
+        blobs.putIfAbsent(digest, directoryBlob.blob());
       }
       return digest;
     }
