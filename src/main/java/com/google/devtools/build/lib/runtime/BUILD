@@ -1080,6 +1080,7 @@ java_library(
         "Command.java",
         "CommandEnvironment.java",
         "CommandEventBus.java",
+        "CommandLeakAuditor.java",
         "CommandNameCacheImpl.java",
         "ConfigExpander.java",
         "InfoItem.java",

@@ -722,6 +722,10 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
                 .getKeepStateAfterBuild();
     env.addIdleTask(new GcAndInternerShrinkingIdleTask(stateKeptAfterBuild));
 
+    if (CommandLeakAuditor.isEnabled()) {
+      env.addIdleTask(new CommandLeakAuditor.AuditIdleTask(env.getOutputBase().getPathString()));
+    }
+
     if (options.getInstallBaseGcMaxAge() != null && !options.getInstallBaseGcMaxAge().isZero()) {
       env.addIdleTask(
           InstallBaseGarbageCollectorIdleTask.create(

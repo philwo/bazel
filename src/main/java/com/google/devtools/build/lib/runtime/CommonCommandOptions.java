@@ -63,6 +63,19 @@ public abstract class CommonCommandOptions extends OptionsBase {
   public abstract boolean getEnablePlatformSpecificConfig();
 
   @Option(
+      name = "audit_command_leaks",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING},
+      metadataTags = {OptionMetadataTag.HIDDEN},
+      help =
+          "If true, after the command finishes the server checks (while idle) whether the command's"
+              + " EventBus, CommandEnvironment and Reporter are still reachable, logs any that"
+              + " leaked and dumps the heap for offline retainer analysis. For debugging memory"
+              + " leaks.")
+  public abstract boolean getAuditCommandLeaks();
+
+  @Option(
       name = "config",
       defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,

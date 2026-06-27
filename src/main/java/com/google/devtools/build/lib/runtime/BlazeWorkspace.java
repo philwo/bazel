@@ -345,6 +345,14 @@ public final class BlazeWorkspace {
             buildRequestIdOverride,
             configFlagDefinitions,
             new ResourceManager());
+    CommonCommandOptions commonOptions = options.getOptions(CommonCommandOptions.class);
+    CommandLeakAuditor.setEnabled(commonOptions != null && commonOptions.getAuditCommandLeaks());
+    if (CommandLeakAuditor.isEnabled()) {
+      String commandId = env.getCommandId().toString();
+      CommandLeakAuditor.track(env, "CommandEnvironment", commandId);
+      CommandLeakAuditor.track(env.getEventBus(), "EventBus", commandId);
+      CommandLeakAuditor.track(env.getReporter(), "Reporter", commandId);
+    }
     skyframeExecutor.setClientEnv(env.getClientEnv());
     BuildRequestOptions buildRequestOptions = options.getOptions(BuildRequestOptions.class);
     if (buildRequestOptions != null && !buildRequestOptions.getUseActionCache()) {
