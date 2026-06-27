@@ -969,6 +969,16 @@ public abstract sealed class NestedSet<E> {
     private static final ConcurrentMap<Object[], ImmutableList<?>> flattenedLists =
         new MapMaker().weakKeys().weakValues().makeMap();
 
+    /**
+     * Flattened element counts from prior {@link #expand} calls, keyed like {@link
+     * #flattenedLists}. After a flattened list is GC-cleared, this lets a re-expansion presize the
+     * dedup set instead of growing it from a fixed small capacity (the geometric resize churn
+     * dominated transient allocation on large builds). Written only under the children array's lock
+     * in {@link #expandWithCaching}.
+     */
+    private static final ConcurrentMap<Object[], Integer> flattenedSizes =
+        new MapMaker().weakKeys().makeMap();
+
     Nested(Order order, int depth, Object children) {
       super(order, depth, children);
     }
@@ -1000,15 +1010,17 @@ public abstract sealed class NestedSet<E> {
       synchronized (children) {
         result = (ImmutableList<E>) flattenedLists.get(children);
         if (result == null) {
-          result = expand(children);
+          result = expand(children, flattenedSizes.getOrDefault(children, 0));
           flattenedLists.put(children, result);
+          flattenedSizes.put(children, result.size());
         }
       }
       return result;
     }
 
-    private static <E> ImmutableList<E> expand(Object[] children) {
-      CompactHashSet<E> members = CompactHashSet.createWithExpectedSize(128);
+    private static <E> ImmutableList<E> expand(Object[] children, int expectedSize) {
+      CompactHashSet<E> members =
+          CompactHashSet.createWithExpectedSize(expectedSize > 0 ? expectedSize : 128);
       VisitedArraySet arrays = new VisitedArraySet();
       arrays.add(children);
       walk(arrays, members, children);
