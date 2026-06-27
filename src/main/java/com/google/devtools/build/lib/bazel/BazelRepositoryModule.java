@@ -803,6 +803,24 @@ public class BazelRepositoryModule extends BlazeModule {
 
   @Override
   public void afterCommand() throws AbruptExitException {
+    // The DownloadManager set on these per-server Skyframe functions in beforeCommand captures the
+    // command's Reporter (as its event handler and via the credential factory). Drop it so it does
+    // not pin the command's Reporter for the server's lifetime.
+    repositoryFetchFunction.setDownloadManager(null);
+    moduleFileFunction.setDownloadManager(null);
+    repoSpecFunction.setDownloadManager(null);
+    yankedVersionsFunction.setDownloadManager(null);
+    vendorCommand.setDownloadManager(null);
+    singleExtensionEvalFunction.setDownloadManager(null);
+
+    // The remote repository executor and repo-contents cache set on these per-server Skyframe
+    // functions in beforeCommand hold the command's gRPC channel (and through it the command's
+    // Reporter and credentials). Drop them so they don't pin the command-scoped remote client stack
+    // for the server's lifetime.
+    repositoryFetchFunction.setRepositoryRemoteExecutor(null);
+    repositoryFetchFunction.setRemoteRepoContentsCache(null);
+    singleExtensionEvalFunction.setRepositoryRemoteExecutor(null);
+
     // The lock isn't held if beforeCommand rejected the repo contents cache path.
     if (repositoryCache.getRepoContentsCache().holdsSharedLock()) {
       try {
