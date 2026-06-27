@@ -705,7 +705,7 @@ public class CppCompileAction extends AbstractAction
                 .addTransitive(additionalPrunableHeaders)
                 .addAll(usedCpp20Modules)
                 .build();
-        if (needsIncludeValidation) {
+        if (needsIncludeValidation && !skipIncludeValidation(actionExecutionContext)) {
           verifyActionIncludePaths(systemIncludeDirs);
         }
         return additionalInputs;
@@ -720,7 +720,7 @@ public class CppCompileAction extends AbstractAction
       }
       // In theory, we could verify include paths even earlier, but we want to avoid the restart
       // above necessitating a double-execution.
-      if (needsIncludeValidation) {
+      if (needsIncludeValidation && !skipIncludeValidation(actionExecutionContext)) {
         verifyActionIncludePaths(systemIncludeDirs);
       }
       IncludeScanningHeaderData includeScanningHeaderData =
@@ -1129,6 +1129,18 @@ public class CppCompileAction extends AbstractAction
     return mergeMaps(super.getExecutionInfo(), executionInfo);
   }
 
+  /**
+   * Returns true if this build requested skipping in-JVM C++ include validation
+   * (--experimental_skip_cc_include_validation). Read from the build-request options, which are
+   * uniform across configurations, rather than this action's own configuration: the exec transition
+   * resets target {@link CppOptions} to their defaults, so a per-config read would miss
+   * exec-configuration (host-tool) compiles.
+   */
+  private static boolean skipIncludeValidation(ActionExecutionContext actionExecutionContext) {
+    CppOptions cppOptions = actionExecutionContext.getOptions().getOptions(CppOptions.class);
+    return cppOptions != null && cppOptions.getSkipCcIncludeValidation();
+  }
+
   private static boolean validateInclude(
       Set<Artifact> allowedIncludes, Iterable<PathFragment> ignoreDirs, Artifact include) {
     // Only declared modules are added to an action and so they are always valid.
@@ -1167,7 +1179,7 @@ public class CppCompileAction extends AbstractAction
   public void validateInclusions(
       ActionExecutionContext actionExecutionContext, NestedSet<Artifact> inputsForValidation)
       throws ActionExecutionException {
-    if (!needsIncludeValidation) {
+    if (!needsIncludeValidation || skipIncludeValidation(actionExecutionContext)) {
       return;
     }
     IncludeProblems errors = new IncludeProblems();
@@ -2147,7 +2159,7 @@ public class CppCompileAction extends AbstractAction
     return HeaderDiscovery.discoverInputsFromDependencies(
         this,
         getSourceFile(),
-        needsIncludeValidation,
+        needsIncludeValidation && !skipIncludeValidation(actionExecutionContext),
         processDepset(actionExecutionContext, execRoot, dotDContents).getDependencies(),
         getPermittedSystemIncludePrefixes(execRoot),
         hdInputs.resolver(),
