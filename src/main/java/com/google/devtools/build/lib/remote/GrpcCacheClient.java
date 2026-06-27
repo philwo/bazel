@@ -645,7 +645,10 @@ public class GrpcCacheClient extends RemoteCacheClient implements MissingDigests
               public void onNext(ReadResponse readResponse) {
                 ByteString data = readResponse.getData();
                 try {
-                  data.writeTo(out);
+                  // newInput() wraps the parser's backing array with no copy; transferTo streams it
+                  // straight to out. ByteString.writeTo would instead allocate a full-size
+                  // toByteArray() copy of every chunk.
+                  data.newInput().transferTo(out);
                 } catch (IOException e) {
                   // The output stream either refused to accept more bytes than expected for the
                   // digest or was closed due to cancellation (e.g. dynamic execution choosing the
