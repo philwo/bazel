@@ -14,13 +14,12 @@
 package com.google.devtools.build.lib.vfs;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Splitter;
+import java.util.Arrays;
 
 @VisibleForTesting
 class UnixOsPathPolicy implements OsPathPolicy {
 
   static final UnixOsPathPolicy INSTANCE = new UnixOsPathPolicy();
-  private static final Splitter PATH_SPLITTER = Splitter.on('/').omitEmptyStrings();
 
   @Override
   public int needsToNormalize(String path) {
@@ -66,21 +65,59 @@ class UnixOsPathPolicy implements OsPathPolicy {
     if (path.isEmpty()) {
       return path;
     }
+    // Single-pass equivalent of splitting on "/+", running Utils.removeRelativePaths, and rejoining
+    // (the segment-array form allocated a Splitter Matcher, the split list, a String[], and a
+    // substring per segment). Builds the result directly, recording each kept segment's start
+    // offset
+    // in segStart so a ".." can pop the previous segment exactly as removeRelativePaths does.
     boolean isAbsolute = path.charAt(0) == '/';
-    StringBuilder sb = new StringBuilder(path.length());
+    int n = path.length();
+    StringBuilder sb = new StringBuilder(n);
     if (isAbsolute) {
       sb.append('/');
     }
-    String[] segments = PATH_SPLITTER.splitToList(path).toArray(new String[0]);
-    int segmentCount = Utils.removeRelativePaths(segments, 0, isAbsolute);
-    for (int i = 0; i < segmentCount; ++i) {
-      sb.append(segments[i]);
-      sb.append('/');
+    int[] segStart = new int[10];
+    int depth = 0;
+    int i = 0;
+    while (i < n) {
+      while (i < n && path.charAt(i) == '/') {
+        i++; // collapse "/+" runs (and skip the leading slash)
+      }
+      if (i >= n) {
+        break;
+      }
+      int start = i;
+      while (i < n && path.charAt(i) != '/') {
+        i++;
+      }
+      int len = i - start;
+      if (len == 1 && path.charAt(start) == '.') {
+        continue; // drop "."
+      }
+      if (len == 2 && path.charAt(start) == '.' && path.charAt(start + 1) == '.') {
+        if (depth > 0 && !lastSegmentIsDotDot(sb, segStart[depth - 1])) {
+          sb.setLength(segStart[--depth]); // pop the previous segment (and its trailing '/')
+          continue;
+        } else if (isAbsolute) {
+          continue; // drop ".." at the root
+        }
+        // Otherwise (relative, no poppable segment) keep the "..".
+      }
+      if (depth == segStart.length) {
+        segStart = Arrays.copyOf(segStart, depth * 2);
+      }
+      segStart[depth++] = sb.length();
+      sb.append(path, start, i).append('/');
     }
-    if (segmentCount > 0) {
-      sb.deleteCharAt(sb.length() - 1);
+    if (depth > 0) {
+      sb.setLength(sb.length() - 1); // strip the trailing '/'
     }
     return sb.toString();
+  }
+
+  /** Whether the kept segment starting at {@code s} (ending before its trailing '/') is "..". */
+  private static boolean lastSegmentIsDotDot(StringBuilder sb, int s) {
+    return sb.length() - 1 - s == 2 && sb.charAt(s) == '.' && sb.charAt(s + 1) == '.';
   }
 
   @Override
