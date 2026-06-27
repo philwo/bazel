@@ -284,6 +284,11 @@ final class RemoteActionContextProvider {
       actionInputFetcher.shutdown();
     }
     if (remoteExecutionService != null) {
+      // The service is registered on the command EventBus, which can stay reachable past the
+      // command (e.g. via a persistent module that captured the command Reporter). Unregister so
+      // the service and everything it retains is released at command end instead of being pinned
+      // until the next command.
+      env.getEventBus().unregister(remoteExecutionService);
       remoteExecutionService.shutdown();
     } else {
       if (combinedCache != null) {
