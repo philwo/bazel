@@ -284,5 +284,8 @@ public class DynamicExecutionModule extends BlazeModule {
   public void afterCommand() {
     ExecutorUtil.interruptibleShutdown(executorService);
     executorService = null;
+    // Drop the captured command Reporter; this module is per-server, so holding it would pin the
+    // command's Reporter (and the EventBus graph it reaches) for the server's lifetime.
+    reporter = null;
   }
 }

@@ -125,8 +125,18 @@ public class CommandProfilerModule extends BlazeModule {
 
   @Override
   public void afterCommand() {
-    if (profileType == null) {
-      // Early exit so we don't attempt to load the JNI unless necessary.
+    // Always drop the captured command-scoped references, even when no profile was taken: this is a
+    // per-server module, so retaining the command's Reporter would pin it (and the EventBus graph
+    // it
+    // reaches) for the server's lifetime.
+    reporter = null;
+    outputBase = null;
+    outputPath = null;
+    ProfileType type = profileType;
+    profileType = null;
+
+    if (type == null) {
+      // No profile was started, so there is nothing to stop (and no need to load the JNI profiler).
       return;
     }
 
@@ -136,11 +146,6 @@ public class CommandProfilerModule extends BlazeModule {
     }
 
     profiler.stop();
-
-    profileType = null;
-    outputBase = null;
-    reporter = null;
-    outputPath = null;
   }
 
   @Nullable

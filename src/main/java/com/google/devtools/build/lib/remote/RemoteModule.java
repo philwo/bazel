@@ -1134,6 +1134,10 @@ public final class RemoteModule extends BlazeModule {
 
     buildEventArtifactUploaderFactoryDelegate.reset();
     repositoryRemoteHelpersFactoryDelegate.reset();
+    // The error handler installed in beforeCommand is a global static that captures the command's
+    // env (via its Reporter). Reset it so RxJavaPlugins doesn't pin the whole command-scoped object
+    // graph for the server's lifetime.
+    RxJavaPlugins.setErrorHandler(null);
     if (env.getDirectories().getOutputBase().getFileSystem()
         instanceof RemoteExternalOverlayFileSystem remoteFs) {
       remoteFs.afterCommand();

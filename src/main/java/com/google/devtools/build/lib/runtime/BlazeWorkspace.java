@@ -20,7 +20,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Range;
-import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.SubscriberExceptionHandler;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.ResourceManager;
@@ -327,7 +326,7 @@ public final class BlazeWorkspace {
         new CommandEnvironment(
             runtime,
             this,
-            new EventBus(eventBusExceptionHandler),
+            new CommandEventBus(eventBusExceptionHandler),
             Thread.currentThread(),
             command,
             options,

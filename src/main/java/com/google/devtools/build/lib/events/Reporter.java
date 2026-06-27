@@ -101,6 +101,17 @@ public final class Reporter implements ExtendedEventHandler {
   }
 
   /**
+   * Removes every {@link EventHandler} from this reporter, so that a reporter that outlives its
+   * command doesn't keep the command's handlers alive.
+   */
+  public void removeAllHandlers() {
+    eventHandlers.clear();
+    ansiAllowingHandler = null;
+    ansiStrippingHandler = null;
+    ansiAllowingHandlerRegistered = false;
+  }
+
+  /**
    * Handle the provided {@link Event} using all the {@link EventHandler} registered in this
    * reporter.
    */

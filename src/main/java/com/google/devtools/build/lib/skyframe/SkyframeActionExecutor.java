@@ -535,6 +535,10 @@ public final class SkyframeActionExecutor {
     this.outputDirectoryHelper = null;
     this.actionConcurrencyMeter.stop();
     this.actionConcurrencyMeter = null;
+    // These per-build inputs can transitively pin command-scoped state (the prefetcher reaches the
+    // command Reporter/EventBus), so clear them like the other heavy fields above.
+    this.actionInputPrefetcher = null;
+    this.perBuildFileCache = null;
   }
 
   /**

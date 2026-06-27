@@ -1079,6 +1079,7 @@ java_library(
         "BuildEventArtifactUploaderFactoryMap.java",
         "Command.java",
         "CommandEnvironment.java",
+        "CommandEventBus.java",
         "CommandNameCacheImpl.java",
         "ConfigExpander.java",
         "InfoItem.java",

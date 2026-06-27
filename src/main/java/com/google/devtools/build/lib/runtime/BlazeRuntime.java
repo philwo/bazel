@@ -937,6 +937,14 @@ public final class BlazeRuntime implements BugReport.BlazeRuntimeInterface {
     }
 
     env.getReporter().cleanup();
+    // The Reporter can outlive the command, and a handler such as the UiEventHandler holds the
+    // command's EventBus.
+    env.getReporter().removeAllHandlers();
+    // Drop all subscribers from the command's EventBus so it stops retaining the command-scoped
+    // object graph (the bus can outlive the command via long-lived subsystems).
+    if (env.getEventBus() instanceof CommandEventBus commandEventBus) {
+      commandEventBus.unregisterAll();
+    }
     actionKeyContext.clear();
     DebugLoggerConfigurator.flushServerLog();
     storedExitCode.set(null);
