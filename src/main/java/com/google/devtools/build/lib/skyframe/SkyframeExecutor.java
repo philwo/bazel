@@ -56,7 +56,6 @@ import com.google.devtools.build.lib.actions.ActionCacheChecker;
 import com.google.devtools.build.lib.actions.ActionConflictException;
 import com.google.devtools.build.lib.actions.ActionExecutionStatusReporter;
 import com.google.devtools.build.lib.actions.ActionGraph;
-import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.ActionInputPrefetcher;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionLogBufferPathGenerator;
@@ -66,9 +65,7 @@ import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.ActionOutputDirectoryHelper;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
-import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
-import com.google.devtools.build.lib.actions.CompletionContext.PathResolverFactory;
 import com.google.devtools.build.lib.actions.DiscoveredModulesPruner;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.Executor;
@@ -443,8 +440,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
 
   private final SkyKeyStateReceiver skyKeyStateReceiver;
 
-  private final PathResolverFactory pathResolverFactory = new PathResolverFactoryImpl();
-
   // A Semaphore to limit the number of in-flight execution of certain SkyFunctions to prevent OOM.
   // TODO(b/185987566): Remove this semaphore.
   private static final int DEFAULT_SEMAPHORE_SIZE = Runtime.getRuntime().availableProcessors();
@@ -692,20 +687,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     return remoteAnalysisCachingDependenciesProvider.mode().isRetrievalEnabled();
   }
 
-  final class PathResolverFactoryImpl implements PathResolverFactory {
-    @Override
-    public ArtifactPathResolver createPathResolverForArtifactValues(ActionInputMap actionInputMap) {
-      return outputService.supportsPathResolverForArtifactValues()
-          ? outputService.createPathResolverForArtifactValues(
-              directories.getExecRoot(ruleClassProvider.getRunfilesPrefix()).asFragment(),
-              directories.getRelativeOutputPath(),
-              fileSystem,
-              getPackagePathEntries(),
-              actionInputMap)
-          : ArtifactPathResolver.IDENTITY;
-    }
-  }
-
   protected SkyframeExecutor(
       Consumer<SkyframeExecutor> skyframeExecutorConsumerOnInit,
       PackageFactory pkgFactory,
@@ -944,7 +925,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(
         SkyFunctions.TARGET_COMPLETION,
         TargetCompletor.targetCompletionFunction(
-            pathResolverFactory,
             skyframeActionExecutor,
             topLevelArtifactsMetric,
             actionRewindStrategy,
@@ -952,7 +932,6 @@ public abstract class SkyframeExecutor implements WalkableGraphFactory {
     map.put(
         SkyFunctions.ASPECT_COMPLETION,
         AspectCompletor.aspectCompletionFunction(
-            pathResolverFactory,
             skyframeActionExecutor,
             topLevelArtifactsMetric,
             actionRewindStrategy,

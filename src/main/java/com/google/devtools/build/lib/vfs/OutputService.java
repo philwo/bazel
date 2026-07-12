@@ -17,9 +17,7 @@ package com.google.devtools.build.lib.vfs;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
-import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.ArtifactPathResolver;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.InputMetadataProvider;
@@ -238,19 +236,6 @@ public interface OutputService {
    */
   default void checkActionFileSystemForLostInputs(FileSystem actionFileSystem, Action action)
       throws LostInputsActionExecutionException {}
-
-  default boolean supportsPathResolverForArtifactValues() {
-    return false;
-  }
-
-  default ArtifactPathResolver createPathResolverForArtifactValues(
-      PathFragment execRoot,
-      String relativeOutputPath,
-      FileSystem fileSystem,
-      ImmutableList<Root> pathEntries,
-      ActionInputMap actionInputMap) {
-    throw new IllegalStateException("Path resolver not supported by this class");
-  }
 
   @Nullable
   default BulkDeleter bulkDeleter() {

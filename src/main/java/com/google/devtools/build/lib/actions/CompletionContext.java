@@ -46,11 +46,14 @@ public final class CompletionContext {
     this.importantInputMap = importantInputMap;
   }
 
-  public static CompletionContext create(
-      ActionInputMap importantInputMap, PathResolverFactory pathResolverFactory) {
-    return new CompletionContext(
-        pathResolverFactory.createPathResolverForArtifactValues(importantInputMap),
-        importantInputMap);
+  public static CompletionContext create(ActionInputMap importantInputMap) {
+    // Use the real-filesystem IDENTITY resolver rather than a command-scoped
+    // ArtifactPathResolver backed by a RemoteActionFileSystem. This event is retained by Skyframe
+    // as a completion node's replayable events for the server's lifetime, so it must hold nothing
+    // command-scoped. The BEP layer recovers is-remote/digest from attached metadata (see
+    // ByteStreamBuildEventArtifactUploader), and visitArtifacts/getFileArtifactValue are
+    // metadata-only, so toPath only ever needs the artifact's real on-disk path.
+    return new CompletionContext(ArtifactPathResolver.IDENTITY, importantInputMap);
   }
 
   public ArtifactPathResolver pathResolver() {
@@ -107,10 +110,5 @@ public final class CompletionContext {
     void accept(Artifact artifact, FileArtifactValue metadata);
 
     void acceptFilesetMapping(Artifact fileset, FilesetOutputSymlink link);
-  }
-
-  /** A factory for {@link ArtifactPathResolver}. */
-  public interface PathResolverFactory {
-    ArtifactPathResolver createPathResolverForArtifactValues(ActionInputMap actionInputMap);
   }
 }

@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionInputMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CompletionContext;
-import com.google.devtools.build.lib.actions.CompletionContext.PathResolverFactory;
 import com.google.devtools.build.lib.actions.EventReportingArtifacts;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler;
 import com.google.devtools.build.lib.actions.ImportantOutputHandler.ImportantOutputException;
@@ -124,7 +123,6 @@ public final class CompletionFunction<
         throws InterruptedException;
   }
 
-  private final PathResolverFactory pathResolverFactory;
   private final Completor<ValueT, ResultT, KeyT> completor;
   private final SkyframeActionExecutor skyframeActionExecutor;
   private final FilesMetricConsumer topLevelArtifactsMetric;
@@ -132,13 +130,11 @@ public final class CompletionFunction<
   private final BugReporter bugReporter;
 
   CompletionFunction(
-      PathResolverFactory pathResolverFactory,
       Completor<ValueT, ResultT, KeyT> completor,
       SkyframeActionExecutor skyframeActionExecutor,
       FilesMetricConsumer topLevelArtifactsMetric,
       ActionRewindStrategy actionRewindStrategy,
       BugReporter bugReporter) {
-    this.pathResolverFactory = checkNotNull(pathResolverFactory);
     this.completor = checkNotNull(completor);
     this.skyframeActionExecutor = checkNotNull(skyframeActionExecutor);
     this.topLevelArtifactsMetric = checkNotNull(topLevelArtifactsMetric);
@@ -236,7 +232,7 @@ public final class CompletionFunction<
         handleSourceFileError(input, e.getDetailedExitCode(), rootCausesBuilder, env, value, key);
       }
     }
-    CompletionContext ctx = CompletionContext.create(importantInputMap, pathResolverFactory);
+    CompletionContext ctx = CompletionContext.create(importantInputMap);
 
     NestedSet<Cause> rootCauses = rootCausesBuilder.build();
     if (!rootCauses.isEmpty()) {

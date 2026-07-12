@@ -17,7 +17,6 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.CompletionContext;
-import com.google.devtools.build.lib.actions.CompletionContext.PathResolverFactory;
 import com.google.devtools.build.lib.analysis.AspectCompleteEvent;
 import com.google.devtools.build.lib.analysis.AspectValue;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
@@ -40,13 +39,11 @@ final class AspectCompletor
     implements Completor<AspectValue, AspectCompletionValue, AspectCompletionKey> {
 
   static SkyFunction aspectCompletionFunction(
-      PathResolverFactory pathResolverFactory,
       SkyframeActionExecutor skyframeActionExecutor,
       MetadataConsumerForMetrics.FilesMetricConsumer topLevelArtifactsMetric,
       ActionRewindStrategy actionRewindStrategy,
       BugReporter bugReporter) {
     return new CompletionFunction<>(
-        pathResolverFactory,
         new AspectCompletor(),
         skyframeActionExecutor,
         topLevelArtifactsMetric,
