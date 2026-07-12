@@ -61,6 +61,7 @@ import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.devtools.common.options.UnrecognizedOptionException;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -319,6 +320,13 @@ public final class BlazeOptionHandler {
             runtime.getCommandMap().keySet());
     parseRcOptions(eventHandler, commandToRcArgs);
 
+    ImmutableList<String> remainingArgs = remainingCmdLine.build();
+
+    // GN-style per-directory args file: if -C/--output_directory_name is present, load
+    // <dir>/args.bazelrc at RC_FILE priority (below COMMAND_LINE) so explicit command-line flags
+    // still win, mirroring how args.gn provides the base configuration of a GN output directory.
+    parseOutputDirectoryArgsFile(eventHandler, remainingArgs);
+
     // --config flags added by invocation policy are parsed at command-line priority, either before
     // or after the user's command-line options, so that they are expanded by expandConfigOptions()
     // below and appear in the original command line exactly as if the user had passed them.
@@ -336,7 +344,7 @@ public final class BlazeOptionHandler {
     optionsParser.parseWithSourceFunction(
         PriorityCategory.COMMAND_LINE,
         commandOptionSourceFunction,
-        remainingCmdLine.build(),
+        remainingArgs,
         /* fallbackData= */ null);
 
     if (!appendedConfigs.isEmpty()) {
@@ -868,6 +876,83 @@ public final class BlazeOptionHandler {
             .setMessage(message)
             .setCommand(FailureDetails.Command.newBuilder().setCode(detailedCode))
             .build());
+  }
+
+  /**
+   * If {@code -C}/{@code --output_directory_name} appears in the not-yet-parsed command line, reads
+   * {@code <dir>/args.bazelrc} relative to the workspace root and parses each of its flags at
+   * {@link PriorityCategory#RC_FILE} priority. {@code RC_FILE} sits strictly below {@code
+   * COMMAND_LINE}, so explicit command-line flags override the args file (GN parity: the command
+   * line overrides {@code args.gn}). A missing file is silently ignored.
+   *
+   * <p>The file format is one flag per line; blank lines and lines beginning with {@code #} are
+   * ignored, and remaining lines are split on whitespace into individual arguments.
+   */
+  private void parseOutputDirectoryArgsFile(
+      ExtendedEventHandler eventHandler, List<String> remainingCmdLine)
+      throws OptionsParsingException {
+    String outputDirectoryName = peekOutputDirectoryName(remainingCmdLine);
+    if (outputDirectoryName == null) {
+      return;
+    }
+    Path workspaceDirectory = workspace.getWorkspace();
+    if (workspaceDirectory == null) {
+      return;
+    }
+    Path argsFile = workspaceDirectory.getRelative(outputDirectoryName).getRelative("args.bazelrc");
+    ImmutableList<String> lines;
+    try {
+      if (!argsFile.exists()) {
+        return;
+      }
+      lines = FileSystemUtils.readLines(argsFile, StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new OptionsParsingException(
+          "Failed to read args file " + argsFile.getPathString() + ": " + e.getMessage());
+    }
+
+    ImmutableList.Builder<String> argsBuilder = ImmutableList.builder();
+    for (String line : lines) {
+      String trimmed = line.trim();
+      if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+        continue;
+      }
+      argsBuilder.add(trimmed.split("\\s+"));
+    }
+    ImmutableList<String> args = argsBuilder.build();
+    if (args.isEmpty()) {
+      return;
+    }
+
+    String source = argsFile.getPathString();
+    optionsParser.parse(PriorityCategory.RC_FILE, source, args);
+    String note =
+        String.format(
+            "Reading options for '%s' from %s:\n  '%s' -> %s",
+            commandAnnotation.name(), source, commandAnnotation.name(), args);
+    rcfileNotes.add(note);
+    eventHandler.handle(Event.debug(note));
+  }
+
+  /**
+   * Scans the not-yet-parsed command line for the last occurrence of {@code -C} / {@code
+   * --output_directory_name} and returns its value, or {@code null} if not present. Mirrors the
+   * {@code --rc_source} peek in {@link #partitionCommandLineArgs}. Last occurrence wins, matching
+   * how the options parser resolves repeated command-line flags.
+   */
+  @Nullable
+  private static String peekOutputDirectoryName(List<String> args) {
+    String result = null;
+    Iterator<String> it = args.iterator();
+    while (it.hasNext()) {
+      String arg = it.next();
+      if (arg.equals("-C") || arg.equals("--output_directory_name")) {
+        result = it.hasNext() ? it.next() : null;
+      } else if (arg.startsWith("--output_directory_name=")) {
+        result = arg.substring("--output_directory_name=".length());
+      }
+    }
+    return result;
   }
 
   private static void partitionCommandLineArgs(

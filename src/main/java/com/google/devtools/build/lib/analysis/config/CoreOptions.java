@@ -444,7 +444,9 @@ public abstract class CoreOptions extends FragmentOptions implements Cloneable {
           """
           A GN-style output directory (e.g. `out/debug`). When set, the build's output tree is
           named after this directory rather than the CPU and compilation mode, giving each
-          `-C` directory its own stable, isolated output tree.
+          `-C` directory its own stable, isolated output tree. Per-directory flags may be placed
+          in `<dir>/args.bazelrc`, which is loaded automatically (command-line flags take
+          precedence).
           """)
   public abstract String getOutputDirectoryName();
 
