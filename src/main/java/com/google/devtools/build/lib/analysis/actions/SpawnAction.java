@@ -58,6 +58,7 @@ import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnInputs;
 import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.ToolProvider;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.actions.extra.SpawnInfo;
@@ -356,7 +357,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         // an empty list here.
         /* additionalInputs= */ ImmutableList.of(),
         /* reportOutputs= */ true,
-        PathMapper.NOOP);
+        PathMapper.NOOP,
+        PathFragment.EMPTY_FRAGMENT);
   }
 
   /**
@@ -384,11 +386,23 @@ public class SpawnAction extends AbstractAction implements CommandAction {
             getOutputPathsMode(),
             this instanceof StarlarkAction,
             actionExecutionContext.getInputMetadataProvider());
+    // For GN-style output directories the spawn runs with its working directory set to the output
+    // tree root, and command lines / param files are rendered relative to it. Staging keeps true
+    // exec paths via the unmapped `pathMapper` stored on the spawn; only `renderingMapper` (used to
+    // expand argument strings) applies the relativization. Structured artifact references in the
+    // command line are relativized here; shell-command actions (genrule, run_shell) bake their
+    // paths into opaque strings and relativize them at construction time instead.
+    PathFragment workingDirectory =
+        getOwner().getBuildConfigurationInfo().getActionWorkingDirectory();
+    PathMapper renderingMapper =
+        workingDirectory.isEmpty()
+            ? pathMapper
+            : new WorkingDirectoryPathMapper(pathMapper, workingDirectory);
     ExpandedCommandLines expandedCommandLines =
         commandLines.expand(
             actionExecutionContext.getInputMetadataProvider(),
             getPrimaryOutput().getExecPath(),
-            pathMapper,
+            renderingMapper,
             getCommandLineLimits());
 
     return new ActionSpawn(
@@ -398,7 +412,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         getInputs(),
         expandedCommandLines.getParamFiles(),
         reportOutputs,
-        pathMapper);
+        pathMapper,
+        workingDirectory);
   }
 
   @ForOverride
@@ -425,6 +440,13 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         PathMappers.getEffectiveOutputPathsMode(outputPathsMode, getMnemonic(), getExecutionInfo()),
         fp);
     fp.addString(attributes.mnemonic);
+    // Distinguish actions whose command line is rendered relative to a GN-style output-tree working
+    // directory. Only added when non-empty to avoid perturbing the key for the common case.
+    PathFragment workingDirectory =
+        getOwner().getBuildConfigurationInfo().getActionWorkingDirectory();
+    if (!workingDirectory.isEmpty()) {
+      fp.addPath(workingDirectory);
+    }
     attributes.env.addTo(fp);
     fp.addStringMap(getExecutionInfo());
     PathMappers.addToFingerprint(
@@ -567,6 +589,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     private final boolean reportOutputs;
     private final PathMapper pathMapper;
     @Nullable private final Artifact stdoutOutput;
+    private final PathFragment workingDirectory;
 
     /**
      * Creates an ActionSpawn with the given environment variables.
@@ -581,7 +604,8 @@ public class SpawnAction extends AbstractAction implements CommandAction {
         NestedSet<Artifact> inputs,
         List<? extends ActionInput> additionalInputs,
         boolean reportOutputs,
-        PathMapper pathMapper)
+        PathMapper pathMapper,
+        PathFragment workingDirectory)
         throws CommandLineExpansionException {
       super(
           arguments,
@@ -591,6 +615,7 @@ public class SpawnAction extends AbstractAction implements CommandAction {
           parent.attributes.resourceSetOrBuilder);
       this.inputs = SpawnInputs.of(inputs, additionalInputs);
       this.pathMapper = pathMapper;
+      this.workingDirectory = workingDirectory;
       this.effectiveEnvironment = parent.getEffectiveEnvironment(clientEnv, pathMapper);
       this.reportOutputs = reportOutputs;
       this.stdoutOutput = parent.getStdoutOutput();
@@ -599,6 +624,11 @@ public class SpawnAction extends AbstractAction implements CommandAction {
     @Override
     public PathMapper getPathMapper() {
       return pathMapper;
+    }
+
+    @Override
+    public PathFragment getWorkingDirectory() {
+      return workingDirectory;
     }
 
     @Override
