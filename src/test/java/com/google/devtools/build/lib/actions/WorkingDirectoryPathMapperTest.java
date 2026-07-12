@@ -95,6 +95,54 @@ public final class WorkingDirectoryPathMapperTest {
     assertThat(relativize("bazel-out")).isEqualTo("..");
   }
 
+  private static String relativizeCommand(String command, String... knownPaths) {
+    return WorkingDirectoryPathMapper.relativizeCommand(
+        command, java.util.Arrays.stream(knownPaths).map(PathFragment::create).toList(), OUT_DEBUG);
+  }
+
+  @Test
+  public void relativizeCommand_rewritesSourceAndOutputTokens() {
+    // The gzip genrule example: source via ../../, output relative to the working directory.
+    assertThat(
+            relativizeCommand(
+                "gzip -c pkg/foo > bazel-out/out_debug/bin/pkg/foo.gz",
+                "pkg/foo",
+                "bazel-out/out_debug/bin/pkg/foo.gz"))
+        .isEqualTo("gzip -c ../../pkg/foo > bin/pkg/foo.gz");
+  }
+
+  @Test
+  public void relativizeCommand_doesNotRewriteSubstringOfAnotherToken() {
+    // `foo` must not be rewritten inside `foo.gz`.
+    assertThat(relativizeCommand("cp foo foo.gz", "foo")).isEqualTo("cp ../../foo foo.gz");
+  }
+
+  @Test
+  public void relativizeCommand_doesNotRewriteOutputRootEmbeddedInLargerToken() {
+    // The output root must only be rewritten at a shell-token boundary; a token that merely
+    // contains "bazel-out/..." as a substring (e.g. preceded by other path characters) is left
+    // intact rather than having its tail relativized in place.
+    assertThat(relativizeCommand("echo notbazel-out/out_debug/bin/x"))
+        .isEqualTo("echo notbazel-out/out_debug/bin/x");
+  }
+
+  @Test
+  public void relativizeCommand_rewritesOutputTreeTokenAfterPathSeparator() {
+    // A "/" before the output root is a token boundary, not a mid-token character: an exec-tree
+    // tool
+    // referenced as "$ACTIONROOT/bazel-out/out_debug-exec/..." must be relativized so it resolves
+    // against the working directory instead of being doubled onto it.
+    assertThat(relativizeCommand("$ACTIONROOT/bazel-out/out_debug-exec/third_party/nasm/nasm"))
+        .isEqualTo("$ACTIONROOT/../out_debug-exec/third_party/nasm/nasm");
+  }
+
+  @Test
+  public void relativizeCommand_rewritesOutputTreeTokensWithoutKnownPaths() {
+    // Output-tree directory make variables like $(@D) are rewritten purely by prefix.
+    assertThat(relativizeCommand("mkdir -p bazel-out/out_debug/bin/pkg"))
+        .isEqualTo("mkdir -p bin/pkg");
+  }
+
   @Test
   public void relativizeOutputTree_leavesOtherTokens() {
     // A literal that equals a source's exec path stays as written; only output-tree tokens move.
@@ -102,6 +150,16 @@ public final class WorkingDirectoryPathMapperTest {
             WorkingDirectoryPathMapper.relativizeOutputTree(
                 "cp ../../package.json package.json && ls bazel-out/out_debug/bin/pkg", OUT_DEBUG))
         .isEqualTo("cp ../../package.json package.json && ls bin/pkg");
+  }
+
+  @Test
+  public void relativizeCommand_emptyWorkingDirectory_isNoop() {
+    assertThat(
+            WorkingDirectoryPathMapper.relativizeCommand(
+                "gzip -c pkg/foo > out",
+                java.util.List.of(PathFragment.create("pkg/foo")),
+                PathFragment.EMPTY_FRAGMENT))
+        .isEqualTo("gzip -c pkg/foo > out");
   }
 
   @Test

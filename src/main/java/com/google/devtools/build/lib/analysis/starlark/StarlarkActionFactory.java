@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.ResourceSetOrBuilder;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.actions.UserExecException;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.actions.extra.SpawnInfo;
 import com.google.devtools.build.lib.analysis.Allowlist;
@@ -81,6 +82,7 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.SymlinkTargetType;
 import com.google.protobuf.GeneratedMessage;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -623,6 +625,30 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
     boolean pad = !arguments.isEmpty();
 
     if (commandUnchecked instanceof String command) {
+      // GN-style output directories: run the shell command in the output tree and rewrite the exec
+      // paths it references relative to it (the run_shell analog of GN's rebase_path). The command
+      // is user-authored shell, so only declared input/output paths appearing as whole tokens are
+      // rewritten; the relativized command is what gets written to the helper script.
+      PathFragment actionWorkingDirectory =
+          ruleContext.getConfiguration().getActionWorkingDirectory();
+      if (!actionWorkingDirectory.isEmpty()) {
+        List<PathFragment> referencedPaths = new ArrayList<>();
+        for (Artifact output : Sequence.cast(outputs, Artifact.class, "outputs")) {
+          referencedPaths.add(output.getExecPath());
+        }
+        Iterable<?> declaredInputs =
+            inputs instanceof Depset
+                ? Depset.cast(inputs, Artifact.class, "inputs").toList()
+                : Sequence.cast(inputs, Object.class, "inputs");
+        for (Object input : declaredInputs) {
+          if (input instanceof Artifact artifact) {
+            referencedPaths.add(artifact.getExecPath());
+          }
+        }
+        command =
+            WorkingDirectoryPathMapper.relativizeCommand(
+                command, referencedPaths, actionWorkingDirectory);
+      }
       ImmutableMap<String, String> executionInfo =
           ImmutableMap.copyOf(TargetUtils.getExecutionInfo(ruleContext.getRule()));
       String helperScriptSuffix = String.format(".run_shell_%d.sh", runShellOutputCounter++);
@@ -640,7 +666,13 @@ public class StarlarkActionFactory implements StarlarkActionFactoryApi {
       if (helperScript == null) {
         builder.setShellCommand(shExecutable, command, pad);
       } else {
-        builder.setShellCommand(shExecutable, helperScript.getExecPathString(), pad);
+        String helperScriptArg =
+            actionWorkingDirectory.isEmpty()
+                ? helperScript.getExecPathString()
+                : WorkingDirectoryPathMapper.relativize(
+                        helperScript.getExecPath(), actionWorkingDirectory)
+                    .getPathString();
+        builder.setShellCommand(shExecutable, helperScriptArg, pad);
         builder.addInput(helperScript);
       }
     } else if (commandUnchecked instanceof Sequence<?> commandList) {

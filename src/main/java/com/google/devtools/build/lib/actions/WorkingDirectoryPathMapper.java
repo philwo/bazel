@@ -17,6 +17,8 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.regex.Matcher;
@@ -190,6 +192,43 @@ public final class WorkingDirectoryPathMapper implements PathMapper {
   }
 
   /**
+   * Relativizes exec paths embedded in a shell-command string (e.g. a {@code run_shell} command) so
+   * it can run from {@code workingDirectory}. This is the analog of GN's {@code rebase_path}: every
+   * path the command references is rewritten relative to the output tree. Genrules don't use this:
+   * they render the paths their expansion produces relative to the working directory, because a
+   * literal token in a command can equal a source's exec path.
+   *
+   * <p>Output-tree tokens (those under the first segment of {@code workingDirectory}, e.g. {@code
+   * bazel-out/...}) are rewritten wherever they appear, which also covers directory make variables
+   * such as {@code $(@D)} and {@code $(RULEDIR)}. The remaining {@code knownPaths} (source and tool
+   * inputs that have no recognizable prefix) are rewritten only when they appear as whole shell
+   * tokens, so e.g. {@code foo} is not rewritten inside {@code foo.gz}.
+   */
+  public static String relativizeCommand(
+      String command, Iterable<PathFragment> knownPaths, PathFragment workingDirectory) {
+    if (workingDirectory.isEmpty()) {
+      return command;
+    }
+    String outputRoot = workingDirectory.getSegment(0);
+    command = relativizeOutputTree(command, workingDirectory);
+
+    // Replace longer paths first so a path that is a prefix of another doesn't corrupt it.
+    List<PathFragment> sorted = new ArrayList<>();
+    for (PathFragment p : knownPaths) {
+      if (!p.isEmpty() && !p.getSegment(0).equals(outputRoot)) {
+        sorted.add(p);
+      }
+    }
+    sorted.sort(Comparator.comparingInt((PathFragment p) -> p.getPathString().length()).reversed());
+    for (PathFragment p : sorted) {
+      command =
+          replaceWholeTokens(
+              command, p.getPathString(), relativize(p, workingDirectory).getPathString());
+    }
+    return command;
+  }
+
+  /**
    * Relativizes the output-tree tokens in a shell-command string (those under the first segment of
    * {@code workingDirectory}, e.g. {@code bazel-out/...}) so it can run from {@code
    * workingDirectory}. Output-tree tokens are unambiguous, so they are rewritten wherever they
@@ -212,5 +251,45 @@ public final class WorkingDirectoryPathMapper implements PathMapper {
             m ->
                 Matcher.quoteReplacement(
                     relativize(PathFragment.create(m.group()), workingDirectory).getPathString()));
+  }
+
+  /**
+   * Replaces {@code from} with {@code to} only where {@code from} appears as a whole shell token.
+   */
+  private static String replaceWholeTokens(String s, String from, String to) {
+    if (from.isEmpty()) {
+      return s;
+    }
+    StringBuilder sb = null;
+    int searchStart = 0;
+    int copyFrom = 0;
+    int i;
+    while ((i = s.indexOf(from, searchStart)) >= 0) {
+      char before = i == 0 ? ' ' : s.charAt(i - 1);
+      int end = i + from.length();
+      char after = end >= s.length() ? ' ' : s.charAt(end);
+      if (isShellTokenBoundary(before) && isShellTokenBoundary(after)) {
+        if (sb == null) {
+          sb = new StringBuilder(s.length());
+        }
+        sb.append(s, copyFrom, i).append(to);
+        copyFrom = end;
+      }
+      searchStart = end;
+    }
+    if (sb == null) {
+      return s;
+    }
+    sb.append(s, copyFrom, s.length());
+    return sb.toString();
+  }
+
+  /** Whether {@code c} cannot be part of a path token (i.e., delimits one in a shell command). */
+  private static boolean isShellTokenBoundary(char c) {
+    if (Character.isLetterOrDigit(c)) {
+      return false;
+    }
+    // Characters that may appear inside an exec path are not boundaries.
+    return "/._+~@-".indexOf(c) < 0;
   }
 }
