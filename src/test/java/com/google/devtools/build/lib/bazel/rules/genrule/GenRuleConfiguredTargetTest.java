@@ -21,7 +21,9 @@ import static org.junit.Assert.fail;
 
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
+import com.google.devtools.build.lib.analysis.CommandHelper;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ShToolchain;
@@ -31,6 +33,7 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.Test;
@@ -186,6 +189,88 @@ public final class GenRuleConfiguredTargetTest extends BuildViewTestCase {
                 .getPathString());
     assertThat(shellAction.getArguments().get(1)).isEqualTo("-c");
     assertCommandEquals(expected, shellAction.getArguments().get(2));
+  }
+
+  @Test
+  public void testOutputRelativeHelperScriptArg() throws Exception {
+    useConfiguration(
+        "--output_directory_name=out/debug", "--experimental_output_directory_relative_paths");
+    CommandHelper.setMaxCommandLengthForTesting(OptionalInt.of(1));
+    try {
+      scratch.file(
+          "genrule1/BUILD",
+          """
+          genrule(
+              name = "hello_world",
+              srcs = [],
+              outs = ["message.txt"],
+              cmd = 'echo "Hello, world." >$(location message.txt)',
+          )
+          """);
+
+      SpawnAction shellAction = getSpawnAction("//genrule1:hello_world");
+
+      assertThat(shellAction.getArguments().get(0))
+          .isEqualTo(ShToolchain.getPathForHost(targetConfig).getPathString());
+      assertThat(shellAction.getArguments().get(1))
+          .isEqualTo("genrule1/hello_world.genrule_script.sh");
+    } finally {
+      CommandHelper.setMaxCommandLengthForTesting(OptionalInt.empty());
+    }
+  }
+
+  @Test
+  public void testOutputRelativeExpansionsAndLiterals() throws Exception {
+    useConfiguration(
+        "--output_directory_name=out/debug", "--experimental_output_directory_relative_paths");
+    scratch.file(
+        "genrule1/BUILD",
+        """
+        genrule(
+            name = "copy",
+            srcs = ["in.txt"],
+            outs = ["genrule1/in.txt"],
+            cmd = "cp $(location in.txt) genrule1/in.txt; cat $(SRCS) $< > $@; ls $(@D)",
+        )
+        """);
+
+    SpawnAction action = getSpawnAction("//genrule1:copy");
+    PathFragment workingDirectory = targetConfig.getActionWorkingDirectory();
+    String out =
+        WorkingDirectoryPathMapper.relativize(
+                getFileConfiguredTarget("//genrule1:genrule1/in.txt").getArtifact().getExecPath(),
+                workingDirectory)
+            .getPathString();
+
+    // Expansions are relativized; the literal token equal to the source's exec path stays as
+    // written, since the command spells it relative to the working directory.
+    assertCommandEquals(
+        "cp ../../genrule1/in.txt genrule1/in.txt; cat ../../genrule1/in.txt ../../genrule1/in.txt"
+            + " > "
+            + out
+            + "; ls "
+            + PathFragment.create(out).getParentDirectory().getPathString(),
+        action.getArguments().get(2));
+    assertThat(action.getArguments().get(2)).startsWith("source ../../");
+  }
+
+  @Test
+  public void testOutputRelativeRejectsHeuristicLabelExpansion() throws Exception {
+    useConfiguration(
+        "--output_directory_name=out/debug", "--experimental_output_directory_relative_paths");
+    checkError(
+        "genrule1",
+        "heuristic",
+        "not supported with --experimental_output_directory_relative_paths",
+        """
+        genrule(
+            name = "heuristic",
+            srcs = ["in.txt"],
+            outs = ["out.txt"],
+            cmd = "cp :in.txt $@",
+            heuristic_label_expansion = True,
+        )
+        """);
   }
 
   @Test

@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
+import com.google.devtools.build.lib.vfs.PathFragment;
 
 /** The class for constructing command line for Powershell on Windows. */
 public final class WindowsPowershellCommandConstructor implements CommandConstructor {
@@ -47,10 +48,10 @@ public final class WindowsPowershellCommandConstructor implements CommandConstru
   }
 
   @Override
-  public ImmutableList<String> asExecArgv(Artifact scriptFileArtifact) {
+  public ImmutableList<String> asExecArgv(PathFragment scriptFileExecPath) {
     // Powershell doesn't search for the current directory by default, we need to always add
     // ".\" prefix to a relative path.
-    return this.asExecArgv(".\\" + scriptFileArtifact.getExecPathString().replace('/', '\\'));
+    return this.asExecArgv(".\\" + scriptFileExecPath.getPathString().replace('/', '\\'));
   }
 
   @Override

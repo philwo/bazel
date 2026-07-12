@@ -24,6 +24,7 @@ import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
 import com.google.devtools.build.lib.analysis.stringtemplate.TemplateContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.RepositoryMapping;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -59,9 +60,11 @@ final class LocationTemplateContext implements TemplateContext {
       boolean execPaths,
       RepositoryMapping repositoryMapping,
       boolean windowsPath,
-      String workspaceRunfilesDirectory) {
+      String workspaceRunfilesDirectory,
+      PathFragment workingDirectory) {
     this.delegate = delegate;
-    this.functions = LocationExpander.allLocationFunctions(root, locationMap, execPaths);
+    this.functions =
+        LocationExpander.allLocationFunctions(root, locationMap, execPaths, workingDirectory);
     this.repositoryMapping = repositoryMapping;
     this.windowsPath = windowsPath;
     this.workspaceRunfilesDirectory = workspaceRunfilesDirectory;
@@ -77,6 +80,30 @@ final class LocationTemplateContext implements TemplateContext {
       boolean windowsPath) {
     this(
         delegate,
+        ruleContext,
+        labelMap,
+        execPaths,
+        allowData,
+        collectSrcs,
+        windowsPath,
+        PathFragment.EMPTY_FRAGMENT);
+  }
+
+  /**
+   * Creates a context whose exec paths are rendered relative to {@code workingDirectory}, the
+   * exec-root-relative directory the expanded command runs in.
+   */
+  public LocationTemplateContext(
+      TemplateContext delegate,
+      RuleContext ruleContext,
+      @Nullable ImmutableMap<Label, ImmutableCollection<Artifact>> labelMap,
+      boolean execPaths,
+      boolean allowData,
+      boolean collectSrcs,
+      boolean windowsPath,
+      PathFragment workingDirectory) {
+    this(
+        delegate,
         ruleContext.getLabel(),
         // Use a memoizing supplier to avoid eagerly building the location map.
         Suppliers.memoize(
@@ -84,7 +111,8 @@ final class LocationTemplateContext implements TemplateContext {
         execPaths,
         ruleContext.getRule().getPackageMetadata().repositoryMapping(),
         windowsPath,
-        ruleContext.getWorkspaceName());
+        ruleContext.getWorkspaceName(),
+        workingDirectory);
   }
 
   @Override

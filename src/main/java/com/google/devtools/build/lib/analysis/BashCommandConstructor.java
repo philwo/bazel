@@ -32,8 +32,8 @@ public final class BashCommandConstructor implements CommandConstructor {
   }
 
   @Override
-  public ImmutableList<String> asExecArgv(Artifact scriptFileArtifact) {
-    return ImmutableList.of(shellPath.getPathString(), scriptFileArtifact.getExecPathString());
+  public ImmutableList<String> asExecArgv(PathFragment scriptFileExecPath) {
+    return ImmutableList.of(shellPath.getPathString(), scriptFileExecPath.getPathString());
   }
 
   @Override

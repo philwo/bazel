@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Types;
 import com.google.devtools.build.lib.shell.ShellUtils;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
@@ -99,9 +100,27 @@ public final class Expander {
    */
   public Expander withExecLocationsNoSrcs(
       ImmutableMap<Label, ImmutableCollection<Artifact>> locations, boolean windowsPath) {
+    return withExecLocationsNoSrcs(locations, windowsPath, PathFragment.EMPTY_FRAGMENT);
+  }
+
+  /**
+   * Like {@link #withExecLocationsNoSrcs(ImmutableMap, boolean)}, but renders exec paths relative
+   * to {@code workingDirectory}, the exec-root-relative directory the expanded command runs in.
+   */
+  public Expander withExecLocationsNoSrcs(
+      ImmutableMap<Label, ImmutableCollection<Artifact>> locations,
+      boolean windowsPath,
+      PathFragment workingDirectory) {
     TemplateContext newTemplateContext =
         new LocationTemplateContext(
-            templateContext, ruleContext, locations, true, false, false, windowsPath);
+            templateContext,
+            ruleContext,
+            locations,
+            true,
+            false,
+            false,
+            windowsPath,
+            workingDirectory);
     return new Expander(ruleContext, newTemplateContext, labelMap, lookedUpVariables);
   }
 

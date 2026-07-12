@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.ActionConflictException;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandLines;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.analysis.CommandConstructor;
 import com.google.devtools.build.lib.analysis.CommandHelper;
 import com.google.devtools.build.lib.analysis.ConfigurationMakeVariableContext;
@@ -57,6 +58,7 @@ import com.google.errorprone.annotations.ForOverride;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
@@ -119,6 +121,12 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
 
     String baseCommand = ruleContext.attributes().get(cmdAttr, Type.STRING);
 
+    // GN-style output directories: the genrule runs in its config's output tree, so every path the
+    // expansion produces is rendered relative to that directory (e.g. ../../foo, gen/out),
+    // mirroring GN actions. Literal text in the command is left alone.
+    PathFragment actionWorkingDirectory =
+        ruleContext.getConfiguration().getActionWorkingDirectory();
+
     // Expand template variables and functions.
     CommandResolverContext commandResolverContext =
         new CommandResolverContext(
@@ -126,15 +134,25 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
             resolvedSrcs,
             filesToBuild,
             /* makeVariableSuppliers= */ ImmutableList.of(),
-            expandToWindowsPath);
+            expandToWindowsPath,
+            actionWorkingDirectory);
     String command =
         ruleContext
             .getExpander(commandResolverContext)
-            .withExecLocationsNoSrcs(commandHelper.getLabelMap(), expandToWindowsPath)
+            .withExecLocationsNoSrcs(
+                commandHelper.getLabelMap(), expandToWindowsPath, actionWorkingDirectory)
             .expand(cmdAttr, baseCommand);
 
     // Heuristically expand things that look like labels.
     if (ruleContext.attributes().get("heuristic_label_expansion", Type.BOOLEAN)) {
+      if (!actionWorkingDirectory.isEmpty()) {
+        // The heuristic expansion yields exec paths, which don't resolve from the working
+        // directory.
+        ruleContext.attributeError(
+            "heuristic_label_expansion",
+            "not supported with --experimental_output_directory_relative_paths");
+        return null;
+      }
       command = commandHelper.expandLabelsHeuristically(command);
     }
 
@@ -143,8 +161,14 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
       command =
           String.format(
               "source %s; %s",
-              ruleContext.getPrerequisiteArtifact("$genrule_setup").getExecPath(), command);
+              WorkingDirectoryPathMapper.relativize(
+                  ruleContext.getPrerequisiteArtifact("$genrule_setup").getExecPath(),
+                  actionWorkingDirectory),
+              command);
     }
+
+    // Configuration make variables such as $(BINDIR) expand to output-tree exec paths.
+    command = WorkingDirectoryPathMapper.relativizeOutputTree(command, actionWorkingDirectory);
 
     String messageAttr = ruleContext.attributes().get("message", Type.STRING);
     String message = messageAttr.isEmpty() ? "Executing genrule" : messageAttr;
@@ -199,7 +223,8 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
             command,
             inputs,
             constructor,
-            getOsFromConstraintsOrHost(ruleContext.getExecutionPlatform()));
+            getOsFromConstraintsOrHost(ruleContext.getExecutionPlatform()),
+            actionWorkingDirectory);
 
     if (isStampingEnabled(ruleContext)) {
       inputs.add(ruleContext.getAnalysisEnvironment().getStableWorkspaceStatusArtifact());
@@ -306,13 +331,15 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     private final NestedSet<Artifact> resolvedSrcs;
     private final NestedSet<Artifact> filesToBuild;
     private final boolean windowsPath;
+    private final PathFragment workingDirectory;
 
     CommandResolverContext(
         RuleContext ruleContext,
         NestedSet<Artifact> resolvedSrcs,
         NestedSet<Artifact> filesToBuild,
         Iterable<? extends MakeVariableSupplier> makeVariableSuppliers,
-        boolean windowsPath) {
+        boolean windowsPath,
+        PathFragment workingDirectory) {
       super(
           ruleContext.getRule().getPackageDeclarations(),
           ruleContext.getConfiguration(),
@@ -322,6 +349,18 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
       this.resolvedSrcs = resolvedSrcs;
       this.filesToBuild = filesToBuild;
       this.windowsPath = windowsPath;
+      this.workingDirectory = workingDirectory;
+    }
+
+    /** Renders an exec path relative to the working directory the command runs in. */
+    private String path(PathFragment execPath) {
+      return WorkingDirectoryPathMapper.relativize(execPath, workingDirectory).getPathString();
+    }
+
+    private String joinPaths(NestedSet<Artifact> artifacts) {
+      return artifacts.toList().stream()
+          .map(a -> path(a.getExecPath()))
+          .collect(Collectors.joining(" "));
     }
 
     @Override
@@ -335,19 +374,19 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
 
     private String lookupVariableImpl(String variableName) throws ExpansionException {
       if (variableName.equals("SRCS")) {
-        return Artifact.joinExecPaths(" ", resolvedSrcs.toList());
+        return joinPaths(resolvedSrcs);
       }
 
       if (variableName.equals("<")) {
-        return expandSingletonArtifact(resolvedSrcs, "$<", "input file");
+        return path(expandSingletonArtifact(resolvedSrcs, "$<", "input file"));
       }
 
       if (variableName.equals("OUTS")) {
-        return Artifact.joinExecPaths(" ", filesToBuild.toList());
+        return joinPaths(filesToBuild);
       }
 
       if (variableName.equals("@")) {
-        return expandSingletonArtifact(filesToBuild, "$@", "output file");
+        return path(expandSingletonArtifact(filesToBuild, "$@", "output file"));
       }
 
       PathFragment ruleDirPackagePath = ruleContext.getPackageDirectory();
@@ -357,7 +396,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
       if (variableName.equals("RULEDIR")) {
         // The output root directory. This variable expands to the package's root directory
         // in the genfiles tree.
-        return ruleDirExecPath.getPathString();
+        return path(ruleDirExecPath);
       }
 
       if (variableName.equals("@D")) {
@@ -375,9 +414,9 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
             throw new IllegalStateException(
                 "$(@D) for genrule " + ruleContext.getLabel() + " has less than one segment");
           }
-          return relativeOutputFile.getParentDirectory().getPathString();
+          return path(relativeOutputFile.getParentDirectory());
         } else {
-          return ruleDirExecPath.getPathString();
+          return path(ruleDirExecPath);
         }
       }
 
@@ -385,10 +424,10 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     }
 
     /**
-     * Returns the path of the sole element "artifacts", generating an exception with an informative
-     * error message iff the set is not a singleton. Used to expand "$<", "$@".
+     * Returns the exec path of the sole element "artifacts", generating an exception with an
+     * informative error message iff the set is not a singleton. Used to expand "$<", "$@".
      */
-    private static String expandSingletonArtifact(
+    private static PathFragment expandSingletonArtifact(
         NestedSet<Artifact> artifacts, String variable, String artifactName)
         throws ExpansionException {
       if (artifacts.isEmpty()) {
@@ -396,7 +435,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
       } else if (!artifacts.isSingleton()) {
         throw new ExpansionException("variable '" + variable + "' : more than one " + artifactName);
       }
-      return artifacts.getSingleton().getExecPathString();
+      return artifacts.getSingleton().getExecPath();
     }
   }
 }

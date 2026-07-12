@@ -19,6 +19,8 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 
 /**
@@ -185,5 +187,30 @@ public final class WorkingDirectoryPathMapper implements PathMapper {
     Key {
       Objects.requireNonNull(workingDirectory);
     }
+  }
+
+  /**
+   * Relativizes the output-tree tokens in a shell-command string (those under the first segment of
+   * {@code workingDirectory}, e.g. {@code bazel-out/...}) so it can run from {@code
+   * workingDirectory}. Output-tree tokens are unambiguous, so they are rewritten wherever they
+   * appear; this covers directory make variables such as {@code $(BINDIR)}.
+   */
+  public static String relativizeOutputTree(String command, PathFragment workingDirectory) {
+    if (workingDirectory.isEmpty()) {
+      return command;
+    }
+    String outputRoot = workingDirectory.getSegment(0);
+    // The leading lookbehind keeps the output root from matching mid-token: it must not be preceded
+    // by another path-name character, so e.g. "notbazel-out/..." is left intact. A path separator
+    // is deliberately excluded from the lookbehind: an output-tree token after a "/" (e.g.
+    // "$ACTIONROOT/bazel-out/...") is a real reference that must still be relativized.
+    Pattern outputTreeToken =
+        Pattern.compile("(?<![\\w.+~@-])" + Pattern.quote(outputRoot) + "/[\\w./+~@-]+");
+    return outputTreeToken
+        .matcher(command)
+        .replaceAll(
+            m ->
+                Matcher.quoteReplacement(
+                    relativize(PathFragment.create(m.group()), workingDirectory).getPathString()));
   }
 }

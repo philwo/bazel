@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
+import com.google.devtools.build.lib.vfs.PathFragment;
 
 /** The class for constructing command line for Batch on Windows. */
 public final class WindowsBatchCommandConstructor implements CommandConstructor {
@@ -40,8 +41,8 @@ public final class WindowsBatchCommandConstructor implements CommandConstructor 
   }
 
   @Override
-  public ImmutableList<String> asExecArgv(Artifact scriptFileArtifact) {
-    return this.asExecArgv(scriptFileArtifact.getExecPathString().replace('/', '\\'));
+  public ImmutableList<String> asExecArgv(PathFragment scriptFileExecPath) {
+    return this.asExecArgv(scriptFileExecPath.getPathString().replace('/', '\\'));
   }
 
   @Override

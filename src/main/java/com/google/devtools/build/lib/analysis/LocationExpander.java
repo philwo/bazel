@@ -26,6 +26,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.analysis.LocationExpander.LocationFunction.PathType;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.Label.PackageContext;
@@ -250,6 +251,7 @@ public final class LocationExpander {
     private final String name;
     private final PathType pathType;
     private final boolean multiple;
+    private final PathFragment workingDirectory;
 
     LocationFunction(
         Label root,
@@ -257,11 +259,27 @@ public final class LocationExpander {
         String name,
         PathType pathType,
         boolean multiple) {
+      this(root, locationMapSupplier, name, pathType, multiple, PathFragment.EMPTY_FRAGMENT);
+    }
+
+    /**
+     * Creates a location function whose exec paths are rendered relative to {@code
+     * workingDirectory}, the exec-root-relative directory the expanded command runs in; an empty
+     * fragment keeps exec paths as they are.
+     */
+    LocationFunction(
+        Label root,
+        Supplier<Map<Label, Collection<Artifact>>> locationMapSupplier,
+        String name,
+        PathType pathType,
+        boolean multiple,
+        PathFragment workingDirectory) {
       this.root = root;
       this.locationMapSupplier = locationMapSupplier;
       this.name = Preconditions.checkNotNull(name);
       this.pathType = Preconditions.checkNotNull(pathType);
       this.multiple = multiple;
+      this.workingDirectory = Preconditions.checkNotNull(workingDirectory);
     }
 
     /**
@@ -347,7 +365,8 @@ public final class LocationExpander {
     private PathFragment getPath(Artifact artifact, String workspaceRunfilesDirectory) {
       return switch (pathType) {
         case LOCATION -> artifact.getRunfilesPath();
-        case EXEC -> artifact.getExecPath();
+        case EXEC ->
+            WorkingDirectoryPathMapper.relativize(artifact.getExecPath(), workingDirectory);
         case RLOCATION -> {
           PathFragment runfilesPath = artifact.getRunfilesPath();
           if (runfilesPath.startsWith(LabelConstants.EXTERNAL_RUNFILES_PATH_PREFIX)) {
@@ -370,6 +389,18 @@ public final class LocationExpander {
 
   static ImmutableMap<String, LocationFunction> allLocationFunctions(
       Label root, Supplier<Map<Label, Collection<Artifact>>> locationMap, boolean execPaths) {
+    return allLocationFunctions(root, locationMap, execPaths, PathFragment.EMPTY_FRAGMENT);
+  }
+
+  /**
+   * Returns the location functions, with exec paths rendered relative to {@code workingDirectory}
+   * (see {@link LocationFunction}).
+   */
+  static ImmutableMap<String, LocationFunction> allLocationFunctions(
+      Label root,
+      Supplier<Map<Label, Collection<Artifact>>> locationMap,
+      boolean execPaths,
+      PathFragment workingDirectory) {
     return new ImmutableMap.Builder<String, LocationFunction>()
         .put(
             "location",
@@ -378,7 +409,8 @@ public final class LocationExpander {
                 locationMap,
                 "location",
                 execPaths ? PathType.EXEC : PathType.LOCATION,
-                EXACTLY_ONE))
+                EXACTLY_ONE,
+                workingDirectory))
         .put(
             "locations",
             new LocationFunction(
@@ -386,27 +418,47 @@ public final class LocationExpander {
                 locationMap,
                 "locations",
                 execPaths ? PathType.EXEC : PathType.LOCATION,
-                ALLOW_MULTIPLE))
+                ALLOW_MULTIPLE,
+                workingDirectory))
         .put(
             "rootpath",
-            new LocationFunction(root, locationMap, "rootpath", PathType.LOCATION, EXACTLY_ONE))
+            new LocationFunction(
+                root, locationMap, "rootpath", PathType.LOCATION, EXACTLY_ONE, workingDirectory))
         .put(
             "rootpaths",
-            new LocationFunction(root, locationMap, "rootpaths", PathType.LOCATION, ALLOW_MULTIPLE))
+            new LocationFunction(
+                root,
+                locationMap,
+                "rootpaths",
+                PathType.LOCATION,
+                ALLOW_MULTIPLE,
+                workingDirectory))
         .put(
             "execpath",
-            new LocationFunction(root, locationMap, "execpath", PathType.EXEC, EXACTLY_ONE))
+            new LocationFunction(
+                root, locationMap, "execpath", PathType.EXEC, EXACTLY_ONE, workingDirectory))
         .put(
             "execpaths",
-            new LocationFunction(root, locationMap, "execpaths", PathType.EXEC, ALLOW_MULTIPLE))
+            new LocationFunction(
+                root, locationMap, "execpaths", PathType.EXEC, ALLOW_MULTIPLE, workingDirectory))
         .put(
             "rlocationpath",
             new LocationFunction(
-                root, locationMap, "rlocationpath", PathType.RLOCATION, EXACTLY_ONE))
+                root,
+                locationMap,
+                "rlocationpath",
+                PathType.RLOCATION,
+                EXACTLY_ONE,
+                workingDirectory))
         .put(
             "rlocationpaths",
             new LocationFunction(
-                root, locationMap, "rlocationpaths", PathType.RLOCATION, ALLOW_MULTIPLE))
+                root,
+                locationMap,
+                "rlocationpaths",
+                PathType.RLOCATION,
+                ALLOW_MULTIPLE,
+                workingDirectory))
         .buildOrThrow();
   }
 

@@ -21,6 +21,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -256,7 +257,11 @@ public final class CommandHelper {
   }
 
   private static Pair<ImmutableList<String>, Artifact> buildCommandLineMaybeWithScriptFile(
-      RuleContext ruleContext, String command, CommandConstructor constructor, OS executionOs) {
+      RuleContext ruleContext,
+      String command,
+      CommandConstructor constructor,
+      OS executionOs,
+      PathFragment actionWorkingDirectory) {
     ImmutableList<String> argv;
     Artifact scriptFileArtifact = null;
     if (command.length() <= maxCommandLength(executionOs)) {
@@ -265,7 +270,12 @@ public final class CommandHelper {
       // Use script file.
       scriptFileArtifact =
           constructor.commandAsScript(ruleContext, ruleContext.getTarget().getName(), command);
-      argv = constructor.asExecArgv(scriptFileArtifact);
+      PathFragment scriptFileExecPath =
+          actionWorkingDirectory.isEmpty()
+              ? scriptFileArtifact.getExecPath()
+              : WorkingDirectoryPathMapper.relativize(
+                  scriptFileArtifact.getExecPath(), actionWorkingDirectory);
+      argv = constructor.asExecArgv(scriptFileExecPath);
     }
     return Pair.of(argv, scriptFileArtifact);
   }
@@ -298,8 +308,23 @@ public final class CommandHelper {
       NestedSetBuilder<Artifact> inputs,
       CommandConstructor constructor,
       OS executionOs) {
+    return buildCommandLine(command, inputs, constructor, executionOs, PathFragment.EMPTY_FRAGMENT);
+  }
+
+  /**
+   * Builds the set of command-line arguments using the specified shell path. Creates a bash script
+   * if the command line is longer than the allowed maximum {@link #maxCommandLength}. Fixes up the
+   * input artifact list with the created bash script when required.
+   */
+  public ImmutableList<String> buildCommandLine(
+      String command,
+      NestedSetBuilder<Artifact> inputs,
+      CommandConstructor constructor,
+      OS executionOs,
+      PathFragment actionWorkingDirectory) {
     Pair<ImmutableList<String>, Artifact> argvAndScriptFile =
-        buildCommandLineMaybeWithScriptFile(ruleContext, command, constructor, executionOs);
+        buildCommandLineMaybeWithScriptFile(
+            ruleContext, command, constructor, executionOs, actionWorkingDirectory);
     if (argvAndScriptFile.second != null) {
       inputs.add(argvAndScriptFile.second);
     }
@@ -314,7 +339,8 @@ public final class CommandHelper {
   public List<String> buildCommandLine(
       String command, List<Artifact> inputs, CommandConstructor constructor, OS executionOs) {
     Pair<ImmutableList<String>, Artifact> argvAndScriptFile =
-        buildCommandLineMaybeWithScriptFile(ruleContext, command, constructor, executionOs);
+        buildCommandLineMaybeWithScriptFile(
+            ruleContext, command, constructor, executionOs, PathFragment.EMPTY_FRAGMENT);
     if (argvAndScriptFile.second != null) {
       inputs.add(argvAndScriptFile.second);
     }

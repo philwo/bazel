@@ -96,6 +96,15 @@ public final class WorkingDirectoryPathMapperTest {
   }
 
   @Test
+  public void relativizeOutputTree_leavesOtherTokens() {
+    // A literal that equals a source's exec path stays as written; only output-tree tokens move.
+    assertThat(
+            WorkingDirectoryPathMapper.relativizeOutputTree(
+                "cp ../../package.json package.json && ls bazel-out/out_debug/bin/pkg", OUT_DEBUG))
+        .isEqualTo("cp ../../package.json package.json && ls bin/pkg");
+  }
+
+  @Test
   public void mapHeuristically_relativizesLinkerFileFlagsInBothSpellings() {
     assertThat(mapHeuristically("-Wl,--version-script=pkg/exports.map"))
         .isEqualTo("-Wl,--version-script=../../pkg/exports.map");
