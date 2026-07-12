@@ -31,6 +31,7 @@ import com.google.devtools.build.lib.actions.SpawnInputs;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +59,7 @@ public final class SpawnBuilder {
 
   private ResourceSetOrBuilder localResources = ResourceSet.ZERO;
   private PathMapper pathMapper = PathMapper.NOOP;
+  private PathFragment workingDirectory = PathFragment.EMPTY_FRAGMENT;
   private boolean builtForToolConfiguration;
 
   public SpawnBuilder(String... args) {
@@ -85,7 +87,8 @@ public final class SpawnBuilder {
         ImmutableSet.copyOf(outputs),
         mandatoryOutputs,
         localResources,
-        pathMapper);
+        pathMapper,
+        workingDirectory);
   }
 
   @CanIgnoreReturnValue
@@ -252,6 +255,12 @@ public final class SpawnBuilder {
   @CanIgnoreReturnValue
   public SpawnBuilder setPathMapper(PathMapper pathMapper) {
     this.pathMapper = pathMapper;
+    return this;
+  }
+
+  @CanIgnoreReturnValue
+  public SpawnBuilder withWorkingDirectory(PathFragment workingDirectory) {
+    this.workingDirectory = checkNotNull(workingDirectory);
     return this;
   }
 

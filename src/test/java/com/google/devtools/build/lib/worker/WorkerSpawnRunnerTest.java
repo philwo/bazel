@@ -109,6 +109,7 @@ public class WorkerSpawnRunnerTest {
             anyInt(), anyLong(), any(), anyString(), anyBoolean(), anyBoolean(), anyInt(), any());
     when(spawn.getLocalResources()).thenReturn(ResourceSet.createWithRamCpu(100, 1));
     when(spawn.getPathMapper()).thenReturn(PathMapper.NOOP);
+    when(spawn.getWorkingDirectory()).thenReturn(PathFragment.EMPTY_FRAGMENT);
     when(resourceManager.acquireResources(any(), any(), any())).thenReturn(resourceHandle);
     when(resourceHandle.getWorker()).thenReturn(worker);
   }

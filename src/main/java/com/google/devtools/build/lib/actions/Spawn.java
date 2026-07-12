@@ -20,6 +20,7 @@ import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.util.DescribableExecutionUnit;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import java.util.HashMap;
 import javax.annotation.Nullable;
@@ -231,5 +232,17 @@ public interface Spawn extends DescribableExecutionUnit {
    */
   default PathMapper getPathMapper() {
     return PathMapper.NOOP;
+  }
+
+  /**
+   * Returns the working directory the spawn should run in, relative to the execroot. The empty
+   * fragment (the default) means the execroot itself.
+   *
+   * <p>Non-empty only for GN-style output directories with {@code
+   * --experimental_output_directory_relative_paths}, where it is {@code bazel-out/<mnemonic>} and
+   * the spawn's command-line paths are rendered relative to it.
+   */
+  default PathFragment getWorkingDirectory() {
+    return PathFragment.EMPTY_FRAGMENT;
   }
 }

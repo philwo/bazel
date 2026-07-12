@@ -137,6 +137,12 @@ final class WorkerSpawnRunner implements SpawnRunner {
     if (!Spawns.supportsWorkers(spawn) && !Spawns.supportsMultiplexWorkers(spawn)) {
       return false;
     }
+    // Persistent workers run with a fixed working directory (the execroot), so they can't honor a
+    // GN-style output-tree working directory. Let such spawns fall back to other strategies, which
+    // resolve the relativized command line correctly.
+    if (!spawn.getWorkingDirectory().isEmpty()) {
+      return false;
+    }
     // Note: `allowlist` is sorted, we could binary search.
     if (workerOptions.getAllowlist() != null
         && !workerOptions.getAllowlist().isEmpty()

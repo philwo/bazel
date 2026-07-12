@@ -311,6 +311,45 @@ public class LocalSpawnRunnerTest {
   }
 
   @Test
+  public void createsWorkingDirectory() throws Exception {
+    assumeTrue(OS.getCurrent() != OS.WINDOWS);
+
+    FileSystem fs = setupEnvironmentForFakeExecution();
+
+    SubprocessFactory factory = mock(SubprocessFactory.class);
+    ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
+    when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(0));
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
+
+    LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
+    LocalSpawnRunner runner =
+        new TestedLocalSpawnRunner(
+            fs.getPath("/execroot"),
+            options,
+            resourceManager,
+            makeProcessWrapper(options),
+            LocalSpawnRunnerTest::keepLocalEnvUnchanged);
+    PathFragment workingDirectory = PathFragment.create("bazel-out/out_debug");
+    Spawn spawn =
+        new SpawnBuilder("/bin/echo", "Hi!")
+            .withEnvironment("VARIABLE", "value")
+            .withWorkingDirectory(workingDirectory)
+            .build();
+
+    FileOutErr fileOutErr = new FileOutErr(fs.getPath("/out/stdout"), fs.getPath("/out/stderr"));
+    SpawnExecutionContextForTesting context =
+        new SpawnExecutionContextForTesting(spawn, fileOutErr, Duration.ofSeconds(123));
+    assertThat(fs.getPath("/execroot").createDirectory()).isTrue();
+
+    SpawnResult result = runner.exec(spawn, context);
+
+    assertThat(result.status()).isEqualTo(SpawnResult.Status.SUCCESS);
+    assertThat(fs.getPath("/execroot").getRelative(workingDirectory).exists()).isTrue();
+    assertThat(captor.getValue().getWorkingDirectory())
+        .isEqualTo(fs.getPath("/execroot").getRelative(workingDirectory).getPathFile());
+  }
+
+  @Test
   public void testParamFiles() throws Exception {
     // TODO(#3536): Make this test work on Windows.
     // The Command API implicitly absolutizes the path, and we get weird paths on Windows:

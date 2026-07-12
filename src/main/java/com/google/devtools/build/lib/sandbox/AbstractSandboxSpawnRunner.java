@@ -267,7 +267,10 @@ abstract class AbstractSandboxSpawnRunner implements SpawnRunner {
     Duration timeout = context.getTimeout();
 
     SubprocessBuilder subprocessBuilder = new SubprocessBuilder(clientEnv);
-    subprocessBuilder.setWorkingDirectory(sandbox.getSandboxExecRoot().getPathFile());
+    Path sandboxWorkingDirectory =
+        sandbox.getSandboxExecRoot().getRelative(originalSpawn.getWorkingDirectory());
+    sandboxWorkingDirectory.createDirectoryAndParents();
+    subprocessBuilder.setWorkingDirectory(sandboxWorkingDirectory.getPathFile());
     // If the spawn redirects its standard output into one of its outputs, write to that output
     // inside the sandbox instead of the regular stdout capture buffer. The file is a regular
     // output, so no other special handling is necessary.

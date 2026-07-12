@@ -22,6 +22,7 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.Collection;
 import java.util.Set;
 import javax.annotation.Nullable;
@@ -41,6 +42,7 @@ public final class SimpleSpawn implements Spawn {
   @Nullable private final Set<? extends ActionInput> mandatoryOutputs;
   private final PathMapper pathMapper;
   private final ResourceSetOrBuilder localResources;
+  private final PathFragment workingDirectory;
   @Nullable private ResourceSet localResourcesCached;
 
   @SuppressWarnings("TooManyParameters")
@@ -54,7 +56,8 @@ public final class SimpleSpawn implements Spawn {
       Collection<? extends ActionInput> outputs,
       @Nullable Set<? extends ActionInput> mandatoryOutputs,
       ResourceSetOrBuilder localResources,
-      PathMapper pathMapper) {
+      PathMapper pathMapper,
+      PathFragment workingDirectory) {
     this.owner = Preconditions.checkNotNull(owner);
     this.arguments = Preconditions.checkNotNull(arguments);
     this.environment = Preconditions.checkNotNull(environment);
@@ -66,6 +69,7 @@ public final class SimpleSpawn implements Spawn {
     this.localResources = Preconditions.checkNotNull(localResources);
     this.localResourcesCached = null;
     this.pathMapper = pathMapper;
+    this.workingDirectory = workingDirectory;
   }
 
   public SimpleSpawn(
@@ -91,6 +95,32 @@ public final class SimpleSpawn implements Spawn {
         PathMapper.NOOP);
   }
 
+  @SuppressWarnings("TooManyParameters")
+  public SimpleSpawn(
+      ActionExecutionMetadata owner,
+      ImmutableList<String> arguments,
+      ImmutableMap<String, String> environment,
+      ImmutableMap<String, String> executionInfo,
+      SpawnInputs inputs,
+      NestedSet<? extends ActionInput> tools,
+      Collection<? extends ActionInput> outputs,
+      @Nullable Set<? extends ActionInput> mandatoryOutputs,
+      ResourceSetOrBuilder localResources,
+      PathMapper pathMapper) {
+    this(
+        owner,
+        arguments,
+        environment,
+        executionInfo,
+        inputs,
+        tools,
+        outputs,
+        mandatoryOutputs,
+        localResources,
+        pathMapper,
+        PathFragment.EMPTY_FRAGMENT);
+  }
+
   public SimpleSpawn(
       ActionExecutionMetadata owner,
       ImmutableList<String> arguments,
@@ -109,6 +139,11 @@ public final class SimpleSpawn implements Spawn {
         outputs,
         /* mandatoryOutputs= */ null,
         localResources);
+  }
+
+  @Override
+  public PathFragment getWorkingDirectory() {
+    return workingDirectory;
   }
 
   @Override
