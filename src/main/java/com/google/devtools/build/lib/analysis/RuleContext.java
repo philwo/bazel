@@ -605,6 +605,23 @@ public class RuleContext extends TargetContext
    * @see #createOutputArtifact()
    */
   public Artifact createOutputArtifact(OutputFile out) {
+    // GN-style output directories: the //codegen package's genrule outputs are
+    // declared with GN's out-relative names (gen/..., obj/..., pyproto/...). Place
+    // them at the output-tree root (bazel-out/<mnemonic>/gen/...) instead of
+    // bin/codegen/..., so a compiled generated source's path (and any source-path
+    // string baked into the object, which -ffile-prefix-map cannot reach) matches
+    // GN's `gen/...`. getShareableArtifact (not getDerivedArtifact, which enforces a
+    // package-dir prefix) is required because the relocated path drops the package.
+    if (out.getKind() == OutputFile.Kind.FILE
+        && !getConfiguration().getActionWorkingDirectory().isEmpty()
+        && getLabel()
+            .getPackageIdentifier()
+            .getPackageFragment()
+            .getPathString()
+            .equals("codegen")) {
+      return getShareableArtifact(
+          PathFragment.create(out.getName()), getConfiguration().getOutputDirectory());
+    }
     PathFragment packageRelativePath =
         getPackageDirectory().getRelative(PathFragment.create(out.getName()));
     return internalCreateOutputArtifact(packageRelativePath, out, out.getKind());

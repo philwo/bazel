@@ -311,12 +311,33 @@ public final class RuleConfiguredTarget extends AbstractConfiguredTarget {
         outputLabel,
         this);
     PathFragment relativeOutputPath = outputLabel.toPathFragment();
+    PathFragment outputName = PathFragment.create(outputLabel.getName());
+    Artifact relocatedMatch = null;
+    boolean relocatedAmbiguous = false;
     for (ActionAnalysisMetadata action : getActions()) {
       for (Artifact output : action.getOutputs()) {
         if (output.getExecPath().endsWith(relativeOutputPath)) {
           return output;
         }
+        // GN-style output directories relocate //codegen genrule outputs to the
+        // output-tree root (gen/...), dropping the <package>/ segment, so the exec
+        // path no longer ends with <package>/<name>. Fall back to matching the bare
+        // output name; only used when the normal match above finds nothing.
+        if (output.getExecPath().endsWith(outputName)) {
+          if (relocatedMatch == null) {
+            relocatedMatch = output;
+          } else if (!relocatedMatch.equals(output)) {
+            relocatedAmbiguous = true;
+          }
+        }
       }
+    }
+    if (relocatedMatch != null) {
+      // Two distinct relocated outputs ending in the same bare name would make the pick
+      // order-dependent; fail loudly rather than silently return the wrong artifact.
+      checkArgument(
+          !relocatedAmbiguous, "Ambiguous relocated output match for %s in %s", outputLabel, this);
+      return relocatedMatch;
     }
     throw new IllegalArgumentException("No output matching " + outputLabel + " in " + this);
   }

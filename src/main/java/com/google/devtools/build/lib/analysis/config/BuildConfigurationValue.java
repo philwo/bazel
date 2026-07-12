@@ -354,7 +354,13 @@ public class BuildConfigurationValue
             "BINDIR",
             getBinDirectory().getExecPathString(),
             "GENDIR",
-            getGenfilesDirectory().getExecPathString());
+            getGenfilesDirectory().getExecPathString(),
+            // The output-tree root (bazel-out/<mnemonic>) — the parent of BINDIR.
+            // In GN-style -C mode this is the directory actions run from; combined
+            // with the working-directory path mapper, $(OUTPUT_DIR)/foo renders as a
+            // clean output-root-relative `foo`.
+            "OUTPUT_DIR",
+            getOutputDirectory().getExecPathString());
 
     this.reservedActionMnemonics = reservedActionMnemonics;
     this.commandLineLimits = new CommandLineLimits(options.getMinParamFileSize());
