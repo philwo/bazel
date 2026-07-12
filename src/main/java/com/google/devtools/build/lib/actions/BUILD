@@ -587,6 +587,7 @@ java_library(
         "Artifacts.java",
         "PathMapper.java",
         "PathMapperConstants.java",
+        "WorkingDirectoryPathMapper.java",
     ],
     exports = [":action_key_context"],
     deps = [

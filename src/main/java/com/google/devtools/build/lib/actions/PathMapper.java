@@ -146,8 +146,14 @@ public interface PathMapper {
     return MapFn.DEFAULT;
   }
 
-  /** Heuristically maps all path-like strings in the given argument. */
-  default String mapHeuristically(String arg) {
+  /**
+   * Heuristically maps all path-like strings in the given argument.
+   *
+   * @param variableName the build variable the argument was expanded from, which lets
+   *     implementations treat values of known path-valued variables (e.g. include directories) as
+   *     exec paths
+   */
+  default String mapHeuristically(@Nullable String variableName, String arg) {
     return arg;
   }
 

@@ -618,7 +618,7 @@ public abstract class CcToolchainVariables implements CcToolchainVariablesApi {
 
     @Override
     public String getStringValue(String variableName, PathMapper pathMapper) {
-      return pathMapper.mapHeuristically(value);
+      return pathMapper.mapHeuristically(variableName, value);
     }
 
     @Override

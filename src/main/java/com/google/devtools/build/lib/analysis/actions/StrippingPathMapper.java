@@ -247,13 +247,13 @@ public final class StrippingPathMapper implements PathMapper {
    * segments with the fixed configuration segment.
    */
   @Override
-  public String mapHeuristically(String arg) {
+  public String mapHeuristically(@Nullable String variableName, String arg) {
     return stripIfOutputPath(arg);
   }
 
   @Override
   public String mapString(String arg) {
-    return supportsHeuristicPathMapping ? mapHeuristically(arg) : arg;
+    return supportsHeuristicPathMapping ? mapHeuristically(/* variableName= */ null, arg) : arg;
   }
 
   @Override
