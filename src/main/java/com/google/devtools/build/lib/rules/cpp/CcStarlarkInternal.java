@@ -1201,9 +1201,16 @@ public class CcStarlarkInternal implements StarlarkValue {
   public Artifact declareOtherOutputFile(
       StarlarkRuleContext starlarkRuleContext, String outputName, Artifact objectFile) {
     RuleContext ruleContext = starlarkRuleContext.getRuleContext();
+    PathFragment rootRelativePath =
+        objectFile.getRootRelativePath().getParentDirectory().getRelative(outputName);
+    // GN-style output directories share objects across configurations, so the output is declared as
+    // a shareable artifact; the default layout keeps the package-scoped derived artifact (which
+    // enforces the package-directory prefix). Gated like CppHelper.getCompileOutputArtifact.
+    if (!ruleContext.getConfiguration().getActionWorkingDirectory().isEmpty()) {
+      return ruleContext.getShareableArtifact(rootRelativePath, objectFile.getRoot());
+    }
     return ruleContext.getDerivedArtifact(
-        objectFile.getRootRelativePath().getParentDirectory().getRelative(outputName),
-        ruleContext.getConfiguration().getBinDirectory());
+        rootRelativePath, ruleContext.getConfiguration().getBinDirectory());
   }
 
   @StarlarkMethod(

@@ -162,6 +162,30 @@ public final class CcToolchainTest extends BuildViewTestCase {
     assertThat(getCppCompileOutputs()).doesNotContain("a.dwo");
   }
 
+  @Test
+  public void outputDirectoryRelativePaths_putsCompileOutputsInGnStyleObjTree() throws Exception {
+    scratch.file(
+        "a/BUILD",
+        "load('@rules_cc//cc:cc_library.bzl', 'cc_library')",
+        "cc_library(name = 'a', srcs = ['a.cc'])");
+    getAnalysisMock()
+        .ccSupport()
+        .setupCcToolchainConfig(
+            mockToolsConfig,
+            CcToolchainConfig.builder().withFeatures(CppRuleClasses.PER_OBJECT_DEBUG_INFO));
+
+    useConfiguration(
+        "--output_directory_name=out/debug",
+        "--experimental_output_directory_relative_paths",
+        "--fission=yes");
+
+    assertThat(getCppCompileOutputExecPaths())
+        .containsAtLeast("bazel-out/out_debug/obj/a/a/a.o", "bazel-out/out_debug/obj/a/a/a.dwo");
+    assertThat(getCppCompileOutputExecPaths())
+        .containsNoneOf(
+            "bazel-out/out_debug/bin/a/_objs/a/a.o", "bazel-out/out_debug/bin/a/_objs/a/a.dwo");
+  }
+
   private ImmutableList<String> getCppCompileOutputs() throws Exception {
     RuleConfiguredTarget target = (RuleConfiguredTarget) getConfiguredTarget("//a:a");
     return target.getActions().stream()
@@ -171,6 +195,18 @@ public final class CcToolchainTest extends BuildViewTestCase {
         .getOutputs()
         .stream()
         .map(Artifact::getFilename)
+        .collect(ImmutableList.toImmutableList());
+  }
+
+  private ImmutableList<String> getCppCompileOutputExecPaths() throws Exception {
+    RuleConfiguredTarget target = (RuleConfiguredTarget) getConfiguredTarget("//a:a");
+    return target.getActions().stream()
+        .filter(a -> a.getMnemonic().equals("CppCompile"))
+        .findFirst()
+        .get()
+        .getOutputs()
+        .stream()
+        .map(Artifact::getExecPathString)
         .collect(ImmutableList.toImmutableList());
   }
 
