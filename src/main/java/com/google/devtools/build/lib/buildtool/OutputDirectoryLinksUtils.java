@@ -13,7 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
+
 import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -21,6 +24,7 @@ import com.google.common.collect.Iterables;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
+import com.google.devtools.build.lib.analysis.config.CoreOptions;
 import com.google.devtools.build.lib.analysis.config.SymlinkDefinition;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.ConvenienceSymlink;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.ConvenienceSymlink.Action;
@@ -79,6 +83,7 @@ public final class OutputDirectoryLinksUtils {
       BlazeDirectories directories,
       EventHandler eventHandler,
       Set<BuildConfigurationValue> targetConfigs,
+      ImmutableSet<String> outputSurfaceDirs,
       String productName) {
     Path execRoot = directories.getExecRoot(workspaceName);
     Path outputPath = directories.getOutputPath(workspaceName);
@@ -130,6 +135,17 @@ public final class OutputDirectoryLinksUtils {
         }
       }
     }
+
+    createOutputDirectoryNameLinks(
+        workspace,
+        directories,
+        targetConfigs,
+        outputSurfaceDirs,
+        mode,
+        convenienceSymlinksBuilder,
+        createdConvenienceSymlinksBuilder,
+        failures,
+        logOnly);
 
     if (!failures.isEmpty()) {
       eventHandler.handle(Event.warn(String.format(
@@ -184,6 +200,117 @@ public final class OutputDirectoryLinksUtils {
       eventHandler.handle(Event.warn(String.format(
           "failed to remove one or more convenience symlinks for prefix '%s':\n  %s", symlinkPrefix,
           Joiner.on("\n  ").join(failures))));
+    }
+  }
+
+  /**
+   * Surfaces a GN-style output directory ({@code --output_directory_name}, e.g. {@code out/debug})
+   * inside the workspace. The {@code -C} directory itself is a real, user-managed directory (it
+   * holds {@code args.bazelrc}, the {@code args.gn} analog); its build outputs are surfaced by
+   * nesting one symlink per top-level output package directly inside it, so that {@code
+   * out/debug/foo/bar} resolves to the bin directory's {@code foo/bar}. With {@code
+   * --experimental_output_directory_relative_paths} the bin directory is the root of the output
+   * tree, which gives GN's {@code out/debug/<path>} layout.
+   *
+   * <p>The {@code -C} value and bin directory are read from the target configurations (a top-level
+   * option shared by all of them). Links are created additively each build (refreshed if they point
+   * elsewhere); pre-existing non-symlinks such as {@code args.bazelrc} are never clobbered. The
+   * link targets may not exist yet at this point (symlinks are planted before execution) and
+   * resolve once the corresponding outputs are written.
+   */
+  private static void createOutputDirectoryNameLinks(
+      Path workspace,
+      BlazeDirectories directories,
+      Set<BuildConfigurationValue> targetConfigs,
+      ImmutableSet<String> outputSurfaceDirs,
+      ConvenienceSymlinksMode mode,
+      ImmutableList.Builder<ConvenienceSymlink> convenienceSymlinksBuilder,
+      ImmutableMap.Builder<PathFragment, PathFragment> createdConvenienceSymlinksBuilder,
+      List<String> failures,
+      boolean logOnly) {
+    ImmutableSet<String> names =
+        targetConfigs.stream()
+            .map(c -> c.getOptions().get(CoreOptions.class).getOutputDirectoryName())
+            .filter(name -> !Strings.isNullOrEmpty(name))
+            .collect(toImmutableSet());
+    if (names.size() != 1) {
+      // No -C in effect, or ambiguous across self-transitioning top-level targets.
+      return;
+    }
+    String name = Iterables.getOnlyElement(names);
+    Path outputDir = workspace.getRelative(name);
+
+    if (mode == ConvenienceSymlinksMode.CLEAN) {
+      removeOutputDirectoryNameLinks(outputDir, directories, failures, logOnly);
+      return;
+    }
+
+    // In GN-layout mode the bin directory is the output-tree root (bin/genfiles collapse into it).
+    ImmutableSet<Path> rootDirs =
+        targetConfigs.stream()
+            .filter(
+                c -> name.equals(c.getOptions().get(CoreOptions.class).getOutputDirectoryName()))
+            .map(c -> c.getBinDirectory().getRoot().asPath())
+            .collect(toImmutableSet());
+    if (rootDirs.size() != 1) {
+      return;
+    }
+    Path rootDir = Iterables.getOnlyElement(rootDirs);
+    Path outputBase = directories.getOutputBase();
+
+    for (String surfaceDir : outputSurfaceDirs) {
+      Path target = rootDir.getRelative(surfaceDir);
+      String linkName = name + "/" + surfaceDir;
+      convenienceSymlinksBuilder.add(
+          ConvenienceSymlink.newBuilder()
+              .setPath(linkName)
+              .setTarget(
+                  target.startsWith(outputBase)
+                      ? target.relativeTo(outputBase).getPathString()
+                      : target.getPathString())
+              .setAction(Action.CREATE)
+              .build());
+      PathFragment linkNameFragment = PathFragment.create(linkName);
+      if (logOnly) {
+        createdConvenienceSymlinksBuilder.put(linkNameFragment, target.asFragment());
+        continue;
+      }
+      Path link = outputDir.getRelative(surfaceDir);
+      try {
+        FileSystemUtils.ensureSymbolicLink(link, target);
+        createdConvenienceSymlinksBuilder.put(linkNameFragment, target.asFragment());
+      } catch (IOException e) {
+        failures.add(
+            String.format("cannot create symbolic link %s -> %s: %s", linkName, target, e));
+      }
+    }
+  }
+
+  /** Removes managed output-surfacing symlinks (those pointing under the output base). */
+  private static void removeOutputDirectoryNameLinks(
+      Path outputDir, BlazeDirectories directories, List<String> failures, boolean logOnly) {
+    if (logOnly) {
+      return;
+    }
+    Path outputBase = directories.getOutputBase();
+    try {
+      if (!outputDir.isDirectory()) {
+        return;
+      }
+      for (Path entry : outputDir.getDirectoryEntries()) {
+        if (!entry.isSymbolicLink()) {
+          continue;
+        }
+        try {
+          if (entry.readSymbolicLink().startsWith(outputBase.asFragment())) {
+            entry.delete();
+          }
+        } catch (IOException e) {
+          failures.add(String.format("%s: %s", entry.getBaseName(), e.getMessage()));
+        }
+      }
+    } catch (IOException e) {
+      failures.add(String.format("%s: %s", outputDir.getPathString(), e.getMessage()));
     }
   }
 

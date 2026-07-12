@@ -446,7 +446,8 @@ public abstract class CoreOptions extends FragmentOptions implements Cloneable {
           named after this directory rather than the CPU and compilation mode, giving each
           `-C` directory its own stable, isolated output tree. Per-directory flags may be placed
           in `<dir>/args.bazelrc`, which is loaded automatically (command-line flags take
-          precedence).
+          precedence). Symbolic links in `<dir>`, one per top-level package directory of the
+          built targets, point into the output tree.
           """)
   public abstract String getOutputDirectoryName();
 

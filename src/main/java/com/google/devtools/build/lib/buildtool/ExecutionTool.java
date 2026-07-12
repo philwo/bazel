@@ -831,8 +831,25 @@ public class ExecutionTool {
           env.getDirectories(),
           getReporter(),
           targetConfigs,
+          outputSurfaceDirs(targetsToBuild),
           productName);
     }
+  }
+
+  /**
+   * Returns the top-level (first-segment) package directories of the main-repository targets being
+   * built. These are the directories surfaced as nested symlinks inside a GN-style {@code -C}
+   * output directory (e.g. {@code //foo/bar:baz} contributes {@code foo}).
+   */
+  private static ImmutableSet<String> outputSurfaceDirs(
+      ImmutableSet<ConfiguredTarget> targetsToBuild) {
+    return targetsToBuild.stream()
+        .map(ConfiguredTarget::getLabel)
+        .filter(label -> label.getRepository().isMain())
+        .map(label -> label.getPackageFragment())
+        .filter(pkg -> !pkg.isEmpty())
+        .map(pkg -> pkg.getSegment(0))
+        .collect(toImmutableSet());
   }
 
   /**
