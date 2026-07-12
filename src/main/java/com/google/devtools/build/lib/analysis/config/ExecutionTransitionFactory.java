@@ -227,6 +227,11 @@ public class ExecutionTransitionFactory
       // TODO(blaze-configurability-team): These updates probably requires a bit too much knowledge
       //   of exactly how the immutable state and mutable state of BuildOptions is interacting.
       //   Might be good to have an option to wipeout that state rather than cloning so much.
+      String outputDirectoryName =
+          options.underlying().get(CoreOptions.class).getOutputDirectoryName();
+      if (outputDirectoryName != null && !outputDirectoryName.isEmpty()) {
+        coreOptions.setOutputDirectoryName(outputDirectoryName);
+      }
       coreOptions.setPlatformSuffix("exec");
       coreOptions.setExecutionInfoModifier(
           options.underlying().get(CoreOptions.class).getExecutionInfoModifier());

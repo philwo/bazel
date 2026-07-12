@@ -67,7 +67,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   public abstract static class PathTestOptions extends FragmentOptions {
 
     @Option(
-        name = "output_directory_name",
+        name = "test_output_directory_name",
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
         defaultValue = "default")
@@ -87,7 +87,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
     @Override
     public void processForOutputPathMnemonic(OutputDirectoriesContext ctx)
         throws OutputDirectoriesContext.AddToMnemonicException {
-      ctx.markAsExplicitInOutputPathFor("output_directory_name");
+      ctx.markAsExplicitInOutputPathFor("test_output_directory_name");
       ctx.addToMnemonic(getOutputDirectoryName());
     }
   }
@@ -316,7 +316,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
 
   @Test
   public void sanityCheckOutputDirectory() throws Exception {
-    addOptions("--output_directory_name=set_by_flag", "--compilation_mode=fastbuild");
+    addOptions("--test_output_directory_name=set_by_flag", "--compilation_mode=fastbuild");
 
     write(
         "path/BUILD",
@@ -577,7 +577,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   public void buildingSameConfigurationTargetsWithDifferentConfigurationDeps_setsSymlinks()
       throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=united-",
         "--compilation_mode=fastbuild",
         "--incompatible_merge_genfiles_directory=false",
@@ -625,7 +625,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void differentConfigurationSameOutputDirectory_setsSymlinks() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=unchanged-",
         "--compilation_mode=fastbuild",
         "--incompatible_merge_genfiles_directory=false",
@@ -668,7 +668,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void nullConfigurationWithOtherMatchingOutputDir_setsSymlinks() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=mixed-",
         "--compilation_mode=fastbuild",
         "--incompatible_merge_genfiles_directory=false",
@@ -706,7 +706,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksReplacesSymlinksAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=replaced-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -738,7 +738,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksCreatesSymlinksIfNotAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=created-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -757,7 +757,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void genfilesLink_omittedWithIncompatibleFlag() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=prefix-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=true");
@@ -776,7 +776,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void genfilesLink_presentWithoutIncompatibleFlag() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=prefix-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -790,7 +790,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksDoesNotReplaceNormalFilesAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=blocked-",
         "--compilation_mode=fastbuild");
 
@@ -819,7 +819,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksDoesNotReplaceDirectoriesAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=blocked-",
         "--compilation_mode=fastbuild");
 
@@ -848,7 +848,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksReplacesSymlinksEvenIfNotPointingInsideExecRoot() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=replaced-",
         "--compilation_mode=fastbuild",
         "--incompatible_merge_genfiles_directory=false",
@@ -896,7 +896,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksCreatesDirectoriesIfNeeded() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=created/",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -917,7 +917,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksDoesNothingWhenParentExistsAndIsNotADirectory() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=blocked/",
         "--compilation_mode=fastbuild");
 
@@ -933,7 +933,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksUsesExistingOrPopulatedParentDirectoryAsNormal() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=cooperating/",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -957,7 +957,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void settingSymlinksIgnoresSymlinksWithDifferentPrefix() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=new-prefix-",
         "--compilation_mode=fastbuild");
     Path binLink = getWorkspace().getChild("other-prefix-bin");
@@ -987,7 +987,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksRemovesConfigurationSymlinksIfAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=deleted-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -1018,7 +1018,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksSucceedsIfNotAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=already-absent-",
         "--compilation_mode=fastbuild");
     Path binLink = getWorkspace().getChild("already-absent-bin");
@@ -1042,7 +1042,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksDoesNotRemoveNormalFilesAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=blocked-",
         "--compilation_mode=fastbuild");
     Path binLink = getWorkspace().getChild("blocked-bin");
@@ -1071,7 +1071,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksDoesNotRemoveDirectoriesAlreadyPresent() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=blocked-",
         "--compilation_mode=fastbuild");
     Path binLink = getWorkspace().getChild("blocked-bin");
@@ -1100,7 +1100,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksRemovesSymlinksEvenIfNotPointingInsideExecRoot() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=deleted-",
         "--compilation_mode=fastbuild",
         "--incompatible_skip_genfiles_symlink=false");
@@ -1135,7 +1135,7 @@ public final class ConvenienceSymlinkTest extends BuildIntegrationTestCase {
   @Test
   public void unsettingSymlinksIgnoresSymlinksWithDifferentPrefix() throws Exception {
     addOptions(
-        "--output_directory_name=from_flag",
+        "--test_output_directory_name=from_flag",
         "--symlink_prefix=new-prefix-",
         "--compilation_mode=fastbuild");
     Path binLink = getWorkspace().getChild("other-prefix-bin");

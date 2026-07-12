@@ -193,10 +193,21 @@ public final class OutputPathMnemonicComputer {
 
     MnemonicContext ctx = new MnemonicContext(baselineOptions);
 
-    handlePlatformCpuDescriptor(ctx, coreOptions, platformOptions);
+    if (!Strings.isNullOrEmpty(coreOptions.getOutputDirectoryName())) {
+      // GN-style output directory: the -C name is the entire mnemonic base, giving each output
+      // directory its own stable, isolated tree regardless of cpu/compilation_mode. cpu and
+      // compilation_mode are intentionally left unmarked so that transitions which change them
+      // still produce a distinct ST-hash subtree under this name.
+      ctx.checkedAddToMnemonic(
+          sanitizeOutputDirectoryName(coreOptions.getOutputDirectoryName()),
+          "Output directory name");
+      ctx.markAsExplicitInOutputPathFor("output_directory_name");
+    } else {
+      handlePlatformCpuDescriptor(ctx, coreOptions, platformOptions);
 
-    ctx.checkedAddToMnemonic(coreOptions.getCompilationMode().toString(), "Compilation mode");
-    ctx.markAsExplicitInOutputPathFor("compilation_mode");
+      ctx.checkedAddToMnemonic(coreOptions.getCompilationMode().toString(), "Compilation mode");
+      ctx.markAsExplicitInOutputPathFor("compilation_mode");
+    }
 
     if (!Strings.isNullOrEmpty(coreOptions.getPlatformSuffix())) {
       ctx.checkedAddToMnemonic(coreOptions.getPlatformSuffix(), "Platform suffix");
@@ -235,6 +246,15 @@ public final class OutputPathMnemonicComputer {
     // derived from getBaseline(), is a function of buildOptions alone.
     boolean dependsOnBaseline = !diffFragment.isEmpty() || ctx.baselineConsulted;
     return new Result(ctx.getMnemonic(), dependsOnBaseline);
+  }
+
+  /**
+   * Collapses a GN-style output directory name into a single path segment usable as a mnemonic
+   * base. Path separators are mandatory to strip: both {@link MnemonicContext#addToMnemonic} and
+   * {@code PathFragment.getChild} reject {@code '/'}.
+   */
+  static String sanitizeOutputDirectoryName(String name) {
+    return name.replace('/', '_').replace('\\', '_');
   }
 
   private static void handlePlatformCpuDescriptor(

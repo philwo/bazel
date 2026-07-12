@@ -430,6 +430,26 @@ public abstract class CoreOptions extends FragmentOptions implements Cloneable {
 
   public abstract void setPlatformSuffix(String value);
 
+  @Option(
+      name = "output_directory_name",
+      abbrev = 'C',
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {
+        OptionEffectTag.LOSES_INCREMENTAL_STATE,
+        OptionEffectTag.AFFECTS_OUTPUTS,
+        OptionEffectTag.LOADING_AND_ANALYSIS
+      },
+      help =
+          """
+          A GN-style output directory (e.g. `out/debug`). When set, the build's output tree is
+          named after this directory rather than the CPU and compilation mode, giving each
+          `-C` directory its own stable, isolated output tree.
+          """)
+  public abstract String getOutputDirectoryName();
+
+  public abstract void setOutputDirectoryName(String value);
+
   // TODO(bazel-team): The set of available variables from the client environment for actions
   // is computed independently in CommandEnvironment to inject a more restricted client
   // environment to skyframe.

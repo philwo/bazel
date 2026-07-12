@@ -743,6 +743,147 @@ public final class BuildConfigurationFunctionTest extends BuildViewTestCase {
   }
 
   @Test
+  public void outputDirectoryName_isStableMnemonicBase() throws Exception {
+    scratch.file("test/BUILD", "filegroup(name = 'test')");
+
+    useConfiguration("--output_directory_name=out/debug");
+
+    assertThat(getMnemonic(getConfiguredTarget("//test"))).isEqualTo("out_debug");
+  }
+
+  @Test
+  public void outputDirectoryName_sameNameSameTreeAcrossTopLevelFlags() throws Exception {
+    // GN semantics: one stable output tree per -C directory. Two top-level flag sets that differ
+    // only in flags (not in the -C name) must land in the same output tree.
+    scratch.file("test/BUILD", "filegroup(name = 'test')");
+
+    useConfiguration("--output_directory_name=out/debug", "--define=FOO=1");
+    String a = getMnemonic(getConfiguredTarget("//test"));
+
+    useConfiguration("--output_directory_name=out/debug", "--define=FOO=2");
+    String b = getMnemonic(getConfiguredTarget("//test"));
+
+    assertThat(a).isEqualTo("out_debug");
+    assertThat(b).isEqualTo("out_debug");
+  }
+
+  @Test
+  public void outputDirectoryName_distinctNamesDistinctTrees() throws Exception {
+    scratch.file("test/BUILD", "filegroup(name = 'test')");
+
+    useConfiguration("--output_directory_name=out/release");
+
+    assertThat(getMnemonic(getConfiguredTarget("//test"))).isEqualTo("out_release");
+  }
+
+  @Test
+  public void outputDirectoryName_execConfigKeepsOutputDirectoryName() throws Exception {
+    // GN-style output directories apply to the whole build, including tools reached through exec
+    // transitions.
+    writeAllowlistFile();
+    scratch.file(
+        "test/rules.bzl",
+        """
+        load("//myinfo:myinfo.bzl", "MyInfo")
+
+        def _impl(ctx):
+            return MyInfo(dep = ctx.attr.dep)
+
+        my_rule = rule(
+            implementation = _impl,
+            attrs = {
+                "dep": attr.label(cfg = 'exec'),
+            },
+        )
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:rules.bzl", "my_rule")
+
+        my_rule(
+            name = "test",
+            dep = ":dep",
+        )
+
+        my_rule(
+            name = "dep",
+        )
+        """);
+
+    useConfiguration("--output_directory_name=out/debug");
+    ConfiguredTarget test = getConfiguredTarget("//test");
+
+    assertThat(getMnemonic(test)).isEqualTo("out_debug");
+
+    ConfiguredTarget dep = (ConfiguredTarget) getMyInfoFromTarget(test).getValue("dep");
+
+    assertThat(getMnemonic(dep)).startsWith("out_debug");
+    assertThat(getMnemonic(dep)).endsWith("-exec");
+  }
+
+  @Test
+  public void outputDirectoryName_transitionGetsStHashUnderName() throws Exception {
+    // A non-exec transition that changes a top-level option still produces a distinct, isolated
+    // tree under the -C name via the ST-hash suffix.
+    writeAllowlistFile();
+    scratch.file(
+        "test/transitions.bzl",
+        """
+        def _opt_impl(settings, attr):
+            return {"//command_line_option:compilation_mode": "opt"}
+
+        opt_transition = transition(
+            implementation = _opt_impl,
+            inputs = [],
+            outputs = ["//command_line_option:compilation_mode"],
+        )
+        """);
+    scratch.file(
+        "test/rules.bzl",
+        """
+        load("//myinfo:myinfo.bzl", "MyInfo")
+        load("//test:transitions.bzl", "opt_transition")
+
+        def _impl(ctx):
+            return MyInfo(dep = ctx.attr.dep)
+
+        my_rule = rule(
+            implementation = _impl,
+            attrs = {
+                "dep": attr.label(cfg = opt_transition),
+            },
+        )
+
+        simple = rule(lambda ctx: [])
+        """);
+    scratch.file(
+        "test/BUILD",
+        """
+        load("//test:rules.bzl", "my_rule", "simple")
+
+        my_rule(
+            name = "test",
+            dep = ":dep",
+        )
+
+        simple(name = "dep")
+        """);
+
+    useConfiguration("--output_directory_name=out/debug", "--compilation_mode=fastbuild");
+    ConfiguredTarget test = getConfiguredTarget("//test");
+
+    assertThat(getMnemonic(test)).isEqualTo("out_debug");
+
+    @SuppressWarnings("unchecked")
+    ConfiguredTarget dep =
+        Iterables.getOnlyElement(
+            (List<ConfiguredTarget>) getMyInfoFromTarget(test).getValue("dep"));
+
+    assertThat(getMnemonic(dep)).startsWith("out_debug-ST-");
+  }
+
+  @Test
   public void testPlatformWithNoCPUConstraint_emptyTargetCpu() throws Exception {
     scratch.file(
         "platforms/BUILD",
