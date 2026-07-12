@@ -59,6 +59,7 @@ import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnInputs;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.actions.extra.CppCompileInfo;
 import com.google.devtools.build.lib.actions.extra.EnvironmentVariable;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
@@ -1646,6 +1647,14 @@ public class CppCompileAction extends AbstractAction
         ccCompilationContext.getDeclaredIncludeSrcs(),
         getMnemonic(),
         PathMappers.getOutputPathsMode(configuration));
+    // The command line key above is computed with PathMapper.NOOP, so it does not reflect whether
+    // paths are rendered relative to a GN-style output-tree working directory. Fingerprint that
+    // directory explicitly so toggling the relativization re-executes the action. Only added when
+    // non-empty to avoid perturbing the key (and invalidating caches) for the common case.
+    PathFragment workingDirectory = configuration.getActionWorkingDirectory();
+    if (!workingDirectory.isEmpty()) {
+      fp.addPath(workingDirectory);
+    }
   }
 
   // Separated into a helper method so that it can be called from CppCompileActionTemplate.
@@ -1731,8 +1740,17 @@ public class CppCompileAction extends AbstractAction
             /* isStarlarkAction= */ false,
             actionExecutionContext.getInputMetadataProvider());
 
+    // For GN-style output directories, render the command line relative to the output-tree root
+    // (the spawn's working directory) while keeping `pathMapper` (used for input staging) at true
+    // exec paths. A source `foo/bar.cc` then appears as `../../foo/bar.cc`, matching GN+Ninja.
+    PathFragment workingDirectory = configuration.getActionWorkingDirectory();
+    PathMapper renderingMapper =
+        workingDirectory.isEmpty()
+            ? pathMapper
+            : new WorkingDirectoryPathMapper(pathMapper, workingDirectory);
+
     ArgumentsAndParamFileActionInput argumentsAndParamFileActionInput =
-        getArgumentsForExecute(pathMapper);
+        getArgumentsForExecute(renderingMapper);
 
     if (shouldScanIncludes) {
       updateActionInputs(additionalInputs);
@@ -1761,6 +1779,7 @@ public class CppCompileAction extends AbstractAction
               argumentsAndParamFileActionInput.arguments(),
               actionExecutionContext.getClientEnv(),
               pathMapper,
+              workingDirectory,
               argumentsAndParamFileActionInput.paramFileActionInput());
     } finally {
       clearAdditionalInputs();
@@ -1991,6 +2010,7 @@ public class CppCompileAction extends AbstractAction
       List<String> args,
       Map<String, String> clientEnv,
       PathMapper pathMapper,
+      PathFragment workingDirectory,
       @Nullable ParamFileActionInput paramFileActionInput)
       throws ActionExecutionException {
     // Intentionally not adding {@link CppCompileAction#inputsForInvalidation}, those are not needed
@@ -2060,7 +2080,8 @@ public class CppCompileAction extends AbstractAction
           (os, inputsSize) ->
               estimateResourceConsumptionLocal(
                   enabledCppCompileResourcesEstimation(), getMnemonic(), os, inputsSize),
-          pathMapper);
+          pathMapper,
+          workingDirectory);
     } catch (CommandLineExpansionException e) {
       String message =
           String.format(
@@ -2140,7 +2161,11 @@ public class CppCompileAction extends AbstractAction
       ActionExecutionContext actionExecutionContext, Path execRoot, byte[] dotDContents)
       throws ActionExecutionException {
     try {
-      DependencySet depSet = new DependencySet(execRoot);
+      // When the spawn runs with its working directory at the output-tree root, the compiler emits
+      // .d dependency paths relative to that directory (e.g. ../../foo/bar.cc), so resolve them
+      // against it rather than the execroot.
+      DependencySet depSet =
+          new DependencySet(execRoot.getRelative(configuration.getActionWorkingDirectory()));
       if (dotDContents != null && cppConfiguration().getInmemoryDotdFiles()) {
         return depSet.process(dotDContents);
       }
