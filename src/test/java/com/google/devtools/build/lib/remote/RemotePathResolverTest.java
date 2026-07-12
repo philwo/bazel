@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.devtools.build.lib.actions.PathMapper;
 import com.google.devtools.build.lib.remote.common.RemotePathResolver;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -47,5 +48,45 @@ public class RemotePathResolverTest {
 
     assertThat(outputPath).isEqualTo("bar");
     assertThat(localPath).isEqualTo(execRoot.getRelative("bar"));
+  }
+
+  @Test
+  public void gnWorkingDirectory_decouplesInputRootFromCommandWorkingDirectory() {
+    // The command runs in the output tree, but inputs stay at true exec paths in the input root.
+    PathFragment workingDirectory = PathFragment.create("bazel-out/out_debug");
+    RemotePathResolver remotePathResolver =
+        RemotePathResolver.createMapped(
+            RemotePathResolver.createDefault(execRoot),
+            execRoot,
+            PathMapper.NOOP,
+            workingDirectory);
+
+    assertThat(remotePathResolver.getCommandWorkingDirectory()).isEqualTo(workingDirectory);
+
+    // An output under the working directory is rendered relative to it, and reversed back.
+    String outputPath =
+        remotePathResolver.localPathToOutputPath(
+            PathFragment.create("bazel-out/out_debug/bin/foo/bar.o"));
+    assertThat(outputPath).isEqualTo("bin/foo/bar.o");
+    assertThat(remotePathResolver.outputPathToLocalPath(outputPath))
+        .isEqualTo(execRoot.getRelative("bazel-out/out_debug/bin/foo/bar.o"));
+  }
+
+  @Test
+  public void gnWorkingDirectory_resolvesSiblingOutputRoot() {
+    PathFragment workingDirectory = PathFragment.create("bazel-out/out_debug");
+    RemotePathResolver remotePathResolver =
+        RemotePathResolver.createMapped(
+            RemotePathResolver.createDefault(execRoot),
+            execRoot,
+            PathMapper.NOOP,
+            workingDirectory);
+
+    String outputPath =
+        remotePathResolver.localPathToOutputPath(
+            PathFragment.create("bazel-out/out_debug-exec/bin/foo/bar.o"));
+    assertThat(outputPath).isEqualTo("../out_debug-exec/bin/foo/bar.o");
+    assertThat(remotePathResolver.outputPathToLocalPath(outputPath))
+        .isEqualTo(execRoot.getRelative("bazel-out/out_debug-exec/bin/foo/bar.o"));
   }
 }

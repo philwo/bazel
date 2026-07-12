@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote.merkletree;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.alwaysFalse;
@@ -378,11 +377,20 @@ public final class MerkleTreeComputer {
         if (outputDirectories == null) {
           outputDirectories = new ArrayList<>(1);
         }
-        outputDirectories.add(new EmptyInputDirectory(artifact));
+        outputDirectories.add(new EmptyInputDirectory(artifact.getExecPath()));
       }
     }
     if (outputDirectories != null) {
       inputFiles = inputFiles.plus(outputDirectories);
+    }
+    // For GN-style output directories the command runs in bazel-out/<mnemonic>, which must exist in
+    // the input root even when no input is staged under it (REAPI requires working_directory to
+    // exist). Inject it as an empty directory, unless something already lives under it (in which
+    // case adding an empty directory node would conflict with that subtree).
+    PathFragment workingDirectory = spawn.getWorkingDirectory();
+    if (!workingDirectory.isEmpty()
+        && !anyInputUnder(pathMapper.map(workingDirectory), inputFiles.flatten(), pathMapper)) {
+      inputFiles = inputFiles.plus(List.of(new EmptyInputDirectory(workingDirectory)));
     }
     // Reduce peak memory usage by avoiding the allocation of intermediate arrays and sorted map, as
     // well as the prolonged retention of mapped paths. All of these can be reconstructed on-the-fly
@@ -430,6 +438,20 @@ public final class MerkleTreeComputer {
           .throwIfNotEmpty();
       throw e;
     }
+  }
+
+  /**
+   * Whether any of the given inputs is staged strictly underneath {@code dir} in the input root.
+   */
+  private static boolean anyInputUnder(
+      PathFragment dir, Collection<ActionInput> inputs, PathMapper pathMapper) {
+    for (ActionInput input : inputs) {
+      PathFragment path = pathMapper.map(input.getExecPath());
+      if (path.startsWith(dir) && path.segmentCount() > dir.segmentCount()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1263,21 +1285,20 @@ public final class MerkleTreeComputer {
   }
 
   private static class EmptyInputDirectory extends BasicActionInput {
-    private final Artifact outputDir;
+    private final PathFragment execPath;
 
-    EmptyInputDirectory(Artifact outputDir) {
-      checkArgument(outputDir.isTreeArtifact());
-      this.outputDir = outputDir;
+    EmptyInputDirectory(PathFragment execPath) {
+      this.execPath = execPath;
     }
 
     @Override
     public String getExecPathString() {
-      return outputDir.getExecPathString();
+      return execPath.getPathString();
     }
 
     @Override
     public PathFragment getExecPath() {
-      return outputDir.getExecPath();
+      return execPath;
     }
   }
 

@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.remote.common;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.PathMapper;
+import com.google.devtools.build.lib.actions.WorkingDirectoryPathMapper;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.concurrent.ConcurrentHashMap;
@@ -26,6 +27,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * Bazel's internal path, or vice versa.
  */
 public interface RemotePathResolver {
+
+  /**
+   * Returns the {@code working_directory} the remote command runs in, relative to the input root.
+   * Empty if the command runs in the input root.
+   *
+   * <p>Non-empty only for GN-style output directories, where inputs stay at true exec paths (input
+   * root) but the command runs in {@code bazel-out/<mnemonic>} with paths rendered relative to it.
+   */
+  default PathFragment getCommandWorkingDirectory() {
+    return PathFragment.EMPTY_FRAGMENT;
+  }
 
   /** Resolves the output path relative to input root for the given {@link Path}. */
   String localPathToOutputPath(Path path);
@@ -93,12 +105,38 @@ public interface RemotePathResolver {
    */
   static RemotePathResolver createMapped(
       RemotePathResolver base, Path execRoot, PathMapper pathMapper) {
-    if (pathMapper.isNoop()) {
+    return createMapped(base, execRoot, pathMapper, PathFragment.EMPTY_FRAGMENT);
+  }
+
+  /**
+   * Like {@link #createMapped(RemotePathResolver, Path, PathMapper)}, but additionally runs the
+   * remote action with the given {@code workingDirectory} (relative to the input root) and renders
+   * output paths relative to it. Input staging is unaffected: the Merkle/input root stays at true
+   * exec paths, and command-line paths (already rendered relative by the spawn) resolve within it.
+   */
+  static RemotePathResolver createMapped(
+      RemotePathResolver base,
+      Path execRoot,
+      PathMapper pathMapper,
+      PathFragment workingDirectory) {
+    if (pathMapper.isNoop() && workingDirectory.isEmpty()) {
       return base;
     }
+    // Fold the working-directory relativization into the path mapper so that output paths are
+    // rendered relative to the working directory and the inverse map reverses them back to true
+    // local paths.
+    PathMapper effectiveMapper =
+        workingDirectory.isEmpty()
+            ? pathMapper
+            : new WorkingDirectoryPathMapper(pathMapper, workingDirectory);
     return new RemotePathResolver() {
       private final ConcurrentHashMap<PathFragment, PathFragment> inverse =
           new ConcurrentHashMap<>();
+
+      @Override
+      public PathFragment getCommandWorkingDirectory() {
+        return workingDirectory.isEmpty() ? base.getCommandWorkingDirectory() : workingDirectory;
+      }
 
       @Override
       public String localPathToOutputPath(Path path) {
@@ -112,8 +150,7 @@ public interface RemotePathResolver {
 
       @Override
       public Path outputPathToLocalPath(String outputPath) {
-        return execRoot.getRelative(
-            inverseMap(base.outputPathToLocalPath(outputPath).relativeTo(execRoot)));
+        return execRoot.getRelative(inverseMap(PathFragment.create(outputPath)));
       }
 
       @Override
@@ -122,7 +159,7 @@ public interface RemotePathResolver {
       }
 
       private PathFragment map(PathFragment path) {
-        PathFragment mappedPath = pathMapper.map(path);
+        PathFragment mappedPath = effectiveMapper.map(path);
         PathFragment previousPath = inverse.put(mappedPath, path);
         Preconditions.checkState(
             previousPath == null || previousPath.equals(path),

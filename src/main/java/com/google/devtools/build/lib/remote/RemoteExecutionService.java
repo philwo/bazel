@@ -333,7 +333,10 @@ public class RemoteExecutionService {
           .setValue(internalToUnicode(env.get(var)));
     }
 
-    return command.build();
+    return command
+        .setWorkingDirectory(
+            internalToUnicode(remotePathResolver.getCommandWorkingDirectory().getPathString()))
+        .build();
   }
 
   private boolean useRemoteCache() {
@@ -540,7 +543,8 @@ public class RemoteExecutionService {
       // execution. This is necessary to ensure that artifacts are correctly emitted into and staged
       // from the unmapped location locally.
       RemotePathResolver remotePathResolver =
-          RemotePathResolver.createMapped(baseRemotePathResolver, execRoot, spawn.getPathMapper());
+          RemotePathResolver.createMapped(
+              baseRemotePathResolver, execRoot, spawn.getPathMapper(), spawn.getWorkingDirectory());
       ToolSignature toolSignature = getToolSignature(spawn, context);
       MerkleTree merkleTree;
       try {
