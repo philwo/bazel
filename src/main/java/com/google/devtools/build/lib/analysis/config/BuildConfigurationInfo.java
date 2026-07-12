@@ -17,6 +17,7 @@ import com.google.auto.value.AutoValue;
 import com.google.devtools.build.lib.actions.BuildConfigurationEvent;
 import com.google.devtools.build.lib.actions.CommandLineLimits;
 import com.google.devtools.build.lib.analysis.config.CoreOptions.OutputPathsMode;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import javax.annotation.Nullable;
 
 /**
@@ -54,6 +55,19 @@ public interface BuildConfigurationInfo {
   CommandLineLimits getCommandLineLimits();
 
   OutputPathsMode getOutputPathsMode();
+
+  /**
+   * Returns the exec-root-relative working directory that actions in this configuration should run
+   * in, or the empty fragment (the execroot) for the normal case.
+   *
+   * <p>Non-empty only for GN-style output directories with {@code
+   * --experimental_output_directory_relative_paths}, where it is the {@code bazel-out/<name>}
+   * directory requested by {@code -C} so that command-line paths can be rendered relative to it
+   * (e.g. {@code ../../foo/bar.cc}).
+   */
+  default PathFragment getActionWorkingDirectory() {
+    return PathFragment.EMPTY_FRAGMENT;
+  }
 
   /**
    * An auto value class of {@link BuildConfigurationInfo}. This provides a convenient way for

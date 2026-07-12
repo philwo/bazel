@@ -232,6 +232,8 @@ public class ExecutionTransitionFactory
       if (outputDirectoryName != null && !outputDirectoryName.isEmpty()) {
         coreOptions.setOutputDirectoryName(outputDirectoryName);
       }
+      coreOptions.setOutputDirectoryRelativePaths(
+          options.underlying().get(CoreOptions.class).getOutputDirectoryRelativePaths());
       coreOptions.setPlatformSuffix("exec");
       coreOptions.setExecutionInfoModifier(
           options.underlying().get(CoreOptions.class).getExecutionInfoModifier());

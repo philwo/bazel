@@ -452,6 +452,30 @@ public abstract class CoreOptions extends FragmentOptions implements Cloneable {
 
   public abstract void setOutputDirectoryName(String value);
 
+  @Option(
+      name = "experimental_output_directory_relative_paths",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      metadataTags = {OptionMetadataTag.EXPERIMENTAL},
+      effectTags = {
+        OptionEffectTag.ACTION_COMMAND_LINES,
+        OptionEffectTag.AFFECTS_OUTPUTS,
+        OptionEffectTag.EXECUTION,
+        OptionEffectTag.LOADING_AND_ANALYSIS
+      },
+      help =
+          """
+          When set together with `--output_directory_name`, actions run with their working
+          directory set to the output tree root (`bazel-out/<name>`), and artifact paths on command
+          lines and in param files are rendered relative to that directory (e.g. a source
+          `foo/bar.cc` becomes `../../foo/bar.cc`). This reproduces GN+Ninja command lines
+          byte-for-byte. Physical input staging keeps true exec paths, so sandbox/remote isolation
+          is preserved.
+          """)
+  public abstract boolean getOutputDirectoryRelativePaths();
+
+  public abstract void setOutputDirectoryRelativePaths(boolean value);
+
   // TODO(bazel-team): The set of available variables from the client environment for actions
   // is computed independently in CommandEnvironment to inject a more restricted client
   // environment to skyframe.

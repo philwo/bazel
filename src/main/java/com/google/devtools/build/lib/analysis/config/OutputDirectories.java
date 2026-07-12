@@ -108,12 +108,43 @@ public class OutputDirectories {
     this.directories = directories;
     this.mnemonic = mnemonic;
 
-    this.outputDirectory = OutputDirectory.OUTPUT.getRoot(mnemonic, directories, workspaceName);
-    this.binDirectory = OutputDirectory.BIN.getRoot(mnemonic, directories, workspaceName);
-    this.genfilesDirectory = OutputDirectory.GENFILES.getRoot(mnemonic, directories, workspaceName);
-    this.testlogsDirectory = OutputDirectory.TESTLOGS.getRoot(mnemonic, directories, workspaceName);
+    if (isGnLayout(options, mnemonic)) {
+      // GN's build dir: gen/obj live directly under the build root, with bin and genfiles
+      // collapsed into it (GN writes everything into one tree). Each config keeps its OWN tree
+      // (bazel-out/<mnemonic>, e.g. out_bazel and the sibling out_bazel-exec) at the same depth, so
+      // generated files' depth-relative paths (e.g. a mojom build_metadata's ../../.. source refs)
+      // resolve correctly in every config — actions run from their own root, not a nested subdir.
+      this.outputDirectory = OutputDirectory.OUTPUT.getRoot(mnemonic, directories, workspaceName);
+      this.binDirectory = this.outputDirectory;
+      this.genfilesDirectory = this.outputDirectory;
+      this.testlogsDirectory =
+          OutputDirectory.TESTLOGS.getRoot(mnemonic, directories, workspaceName);
+    } else {
+      this.outputDirectory = OutputDirectory.OUTPUT.getRoot(mnemonic, directories, workspaceName);
+      this.binDirectory = OutputDirectory.BIN.getRoot(mnemonic, directories, workspaceName);
+      this.genfilesDirectory =
+          OutputDirectory.GENFILES.getRoot(mnemonic, directories, workspaceName);
+      this.testlogsDirectory =
+          OutputDirectory.TESTLOGS.getRoot(mnemonic, directories, workspaceName);
+    }
 
     this.mergeGenfilesDirectory = options.getMergeGenfilesDirectory();
+  }
+
+  /**
+   * Whether this config should emit GN's physical output layout: the relative-paths flag plus a
+   * {@code -C} name, and a mnemonic anchored on that name (so transitions that drop it, e.g.
+   * noconfig, keep the standard layout).
+   */
+  private static boolean isGnLayout(CoreOptions options, String mnemonic) {
+    if (!options.getOutputDirectoryRelativePaths()
+        || options.getOutputDirectoryName() == null
+        || options.getOutputDirectoryName().isEmpty()) {
+      return false;
+    }
+    String base =
+        OutputPathMnemonicComputer.sanitizeOutputDirectoryName(options.getOutputDirectoryName());
+    return mnemonic.equals(base) || mnemonic.startsWith(base + "-");
   }
 
   /** Returns the output directory for this build configuration. */

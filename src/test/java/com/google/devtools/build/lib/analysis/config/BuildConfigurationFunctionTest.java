@@ -811,15 +811,22 @@ public final class BuildConfigurationFunctionTest extends BuildViewTestCase {
         )
         """);
 
-    useConfiguration("--output_directory_name=out/debug");
+    useConfiguration(
+        "--output_directory_name=out/debug", "--experimental_output_directory_relative_paths");
     ConfiguredTarget test = getConfiguredTarget("//test");
 
     assertThat(getMnemonic(test)).isEqualTo("out_debug");
+    assertThat(getConfiguration(test).getActionWorkingDirectory().getPathString())
+        .isEqualTo("bazel-out/out_debug");
 
     ConfiguredTarget dep = (ConfiguredTarget) getMyInfoFromTarget(test).getValue("dep");
 
     assertThat(getMnemonic(dep)).startsWith("out_debug");
     assertThat(getMnemonic(dep)).endsWith("-exec");
+    // The exec dep's outputs live under its own -exec tree, so its actions run from there (not the
+    // baseline bazel-out/out_debug), keeping output paths rendered relative to the right root.
+    assertThat(getConfiguration(dep).getActionWorkingDirectory().getPathString())
+        .isEqualTo("bazel-out/" + getMnemonic(dep));
   }
 
   @Test

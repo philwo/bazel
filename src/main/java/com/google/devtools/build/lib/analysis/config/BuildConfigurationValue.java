@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
@@ -418,6 +419,22 @@ public class BuildConfigurationValue
   /** Returns the output directory for this build configuration. */
   public ArtifactRoot getOutputDirectory() {
     return outputDirectories.getOutputDirectory();
+  }
+
+  @Override
+  public PathFragment getActionWorkingDirectory() {
+    CoreOptions coreOptions = buildOptions.get(CoreOptions.class);
+    if (coreOptions != null
+        && coreOptions.getOutputDirectoryRelativePaths()
+        && !Strings.isNullOrEmpty(coreOptions.getOutputDirectoryName())) {
+      // This config's own output-tree root (bazel-out/<mnemonic>), two segments deep, so a source
+      // at exec path foo/bar.cc renders as ../../foo/bar.cc. Each config (target out_bazel, the
+      // sibling exec out_bazel-exec, …) runs from its own root at the same depth, so bare gen/obj
+      // outputs and depth-relative generated paths resolve within that config — exactly as GN's
+      // per-toolchain output dirs do.
+      return getOutputDirectory().getExecPath();
+    }
+    return PathFragment.EMPTY_FRAGMENT;
   }
 
   /**

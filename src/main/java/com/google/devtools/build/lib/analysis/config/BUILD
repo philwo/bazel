@@ -551,6 +551,7 @@ java_library(
         ":core_options",
         "//src/main/java/com/google/devtools/build/lib/actions:build_configuration_event",
         "//src/main/java/com/google/devtools/build/lib/actions:commandline_limits",
+        "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//third_party/java/auto:auto_value",
         "//third_party/java/jsr305_annotations",
     ],
