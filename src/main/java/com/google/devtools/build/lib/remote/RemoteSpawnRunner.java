@@ -312,8 +312,7 @@ public class RemoteSpawnRunner implements SpawnRunner {
             RemoteActionResult result;
             try (SilentCloseable c = prof.profile(REMOTE_EXECUTION, "execute remotely")) {
               clampTimeNanos = Profiler.instance().nanoTimeMaybe();
-              result =
-                  remoteExecutionService.executeRemotely(action, useCachedResult.get(), reporter);
+              result = executeRemotely(action, context, useCachedResult.get(), reporter);
             }
             // In case of replies from server contains metadata, but none of them has EXECUTING
             // status.
@@ -365,6 +364,37 @@ public class RemoteSpawnRunner implements SpawnRunner {
       throw createExecExceptionForCredentialHelperException(e);
     } catch (IOException e) {
       return execLocallyAndUploadOrFail(action, spawn, context, uploadLocalResults, e);
+    }
+  }
+
+  /**
+   * Executes the action remotely, and once more if the executor killed it at the timeout that
+   * {@code --experimental_remote_default_exec_timeout} gave it.
+   */
+  private RemoteActionResult executeRemotely(
+      RemoteAction action,
+      SpawnExecutionContext context,
+      boolean acceptCachedResult,
+      ExecutingStatusReporter reporter)
+      throws IOException, InterruptedException {
+    try {
+      return remoteExecutionService.executeRemotely(action, acceptCachedResult, reporter);
+    } catch (IOException e) {
+      // A spawn's own timeout, such as a test's, is meant to fail it. A default timeout exists to
+      // kill hung executions, and executors that join an Execute to a running duplicate start a
+      // fresh run only after the timeout killed the old one.
+      if (!context.getTimeout().isZero()
+          || !action.getAction().hasTimeout()
+          || !RemoteRetrierUtils.causedByExecTimeout(e)) {
+        throw e;
+      }
+      report(
+          Event.warn(
+              String.format(
+                  "%s exceeded its remote execution timeout of %ss, retrying once",
+                  action.getSpawn().getResourceOwner().prettyPrint(),
+                  action.getAction().getTimeout().getSeconds())));
+      return remoteExecutionService.executeRemotely(action, acceptCachedResult, reporter);
     }
   }
 

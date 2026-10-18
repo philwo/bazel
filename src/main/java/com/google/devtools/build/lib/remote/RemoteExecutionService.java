@@ -587,7 +587,9 @@ public class RemoteExecutionService {
               commandHash,
               merkleTree.digest(),
               platform,
-              context.getTimeout(),
+              context.getTimeout().isZero()
+                  ? remoteOptions.getRemoteDefaultExecTimeout(spawn.getMnemonic())
+                  : context.getTimeout(),
               Spawns.mayBeCachedRemotely(spawn),
               buildSalt(spawn, spawnScrubber));
 

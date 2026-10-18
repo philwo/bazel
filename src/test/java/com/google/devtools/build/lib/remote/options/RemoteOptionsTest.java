@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.remote.options;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableSortedMap;
@@ -61,6 +62,40 @@ public class RemoteOptionsTest {
             Maps.immutableEntry("foo", "baz")));
     SortedMap<String, String> properties = options.getRemoteDefaultExecProperties();
     assertThat(properties).isEqualTo(ImmutableSortedMap.of("foo", "baz", "qux", "quux"));
+  }
+
+  /** Mnemonic entries override the catch-all, and later entries override earlier ones. */
+  @Test
+  public void testRemoteDefaultExecTimeout() throws Exception {
+    OptionsParser parser = OptionsParser.builder().optionsClasses(RemoteOptions.class).build();
+    parser.parse(
+        "--experimental_remote_default_exec_timeout=CppCompile=2m",
+        "--experimental_remote_default_exec_timeout=15m",
+        "--experimental_remote_default_exec_timeout=CppCompile=4m",
+        "--experimental_remote_default_exec_timeout=Genrule=90");
+    RemoteOptions options = parser.getOptions(RemoteOptions.class);
+
+    assertThat(options.getRemoteDefaultExecTimeout("CppCompile")).isEqualTo(Duration.ofMinutes(4));
+    assertThat(options.getRemoteDefaultExecTimeout("Genrule")).isEqualTo(Duration.ofSeconds(90));
+    assertThat(options.getRemoteDefaultExecTimeout("Rustc")).isEqualTo(Duration.ofMinutes(15));
+  }
+
+  /** Without the flag, no action gets a default timeout. */
+  @Test
+  public void testRemoteDefaultExecTimeoutUnset() throws Exception {
+    RemoteOptions options = Options.getDefaults(RemoteOptions.class);
+
+    assertThat(options.getRemoteDefaultExecTimeout("CppCompile")).isEqualTo(Duration.ZERO);
+  }
+
+  /** An entry needs a valid duration. */
+  @Test
+  public void testRemoteDefaultExecTimeoutInvalid() {
+    OptionsParser parser = OptionsParser.builder().optionsClasses(RemoteOptions.class).build();
+
+    assertThrows(
+        OptionsParsingException.class,
+        () -> parser.parse("--experimental_remote_default_exec_timeout=CppCompile=soon"));
   }
 
   @Test

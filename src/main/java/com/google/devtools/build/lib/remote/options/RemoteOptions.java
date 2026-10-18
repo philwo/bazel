@@ -711,6 +711,42 @@ public abstract class RemoteOptions extends CommonRemoteOptions {
   public abstract void setRemoteExecutionPriority(int value);
 
   @Option(
+      name = "experimental_remote_default_exec_timeout",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.REMOTE,
+      effectTags = {OptionEffectTag.EXECUTION},
+      metadataTags = OptionMetadataTag.EXPERIMENTAL,
+      converter = MnemonicDurationConverter.class,
+      allowMultiple = true,
+      help =
+          "Sets the remote execution timeout of actions that don't set one themselves, which are"
+              + " all actions except tests. Takes [Mnemonic=]duration and can be repeated. An"
+              + " entry with a mnemonic applies to actions with that mnemonic, an entry without"
+              + " one to all others, and later entries override earlier ones. The remote executor"
+              + " kills an action that runs longer, and Bazel retries it once. The timeout is part"
+              + " of the action's remote cache key.")
+  public abstract List<Map.Entry<String, Duration>> getRemoteDefaultExecTimeoutField();
+
+  public abstract void setRemoteDefaultExecTimeoutField(List<Map.Entry<String, Duration>> value);
+
+  /** Converts {@code [Mnemonic=]duration}, using the empty mnemonic for the catch-all entry. */
+  public static class MnemonicDurationConverter
+      extends Converter.Contextless<Map.Entry<String, Duration>> {
+    @Override
+    public Map.Entry<String, Duration> convert(String input) throws OptionsParsingException {
+      int eq = input.lastIndexOf('=');
+      return Map.entry(
+          input.substring(0, Math.max(eq, 0)),
+          new RemoteDurationConverter().convert(input.substring(eq + 1)));
+    }
+
+    @Override
+    public String getTypeDescription() {
+      return "a duration, optionally prefixed with a mnemonic and '='";
+    }
+  }
+
+  @Option(
       name = "remote_default_exec_properties",
       defaultValue = "null",
       documentationCategory = OptionDocumentationCategory.REMOTE,
@@ -1105,6 +1141,23 @@ public abstract class RemoteOptions extends CommonRemoteOptions {
       map.put(entry.getKey(), entry.getValue());
     }
     return ImmutableSortedMap.copyOf(map);
+  }
+
+  /**
+   * Returns the remote execution timeout for actions with the given mnemonic that don't set one
+   * themselves, or {@link Duration#ZERO} for none.
+   */
+  public Duration getRemoteDefaultExecTimeout(String mnemonic) {
+    Duration forMnemonic = null;
+    Duration catchAll = Duration.ZERO;
+    for (Map.Entry<String, Duration> entry : getRemoteDefaultExecTimeoutField()) {
+      if (entry.getKey().equals(mnemonic)) {
+        forMnemonic = entry.getValue();
+      } else if (entry.getKey().isEmpty()) {
+        catchAll = entry.getValue();
+      }
+    }
+    return forMnemonic != null ? forMnemonic : catchAll;
   }
 
   /** An enum for specifying different modes for printing remote execution messages. */

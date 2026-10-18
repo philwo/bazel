@@ -155,9 +155,11 @@ import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Random;
 import java.util.SortedMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -478,6 +480,55 @@ public class RemoteExecutionServiceTest {
 
     CacheSalt expected = CacheSalt.newBuilder().setMayBeExecutedRemotely(false).build();
     assertThat(remoteAction.getAction().getSalt()).isEqualTo(expected.toByteString());
+  }
+
+  /** The last default timeout for a spawn's mnemonic wins, and other spawns get the catch-all. */
+  @Test
+  public void buildRemoteAction_defaultExecTimeout_perMnemonic() throws Exception {
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(
+            Map.entry("CppCompile", Duration.ofMinutes(2)),
+            Map.entry("", Duration.ofMinutes(15)),
+            Map.entry("CppCompile", Duration.ofMinutes(4))));
+    Spawn compile = new SpawnBuilder("dummy").withMnemonic("CppCompile").build();
+    Spawn genrule = new SpawnBuilder("dummy").withMnemonic("Genrule").build();
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction compileAction =
+        service.buildRemoteAction(compile, newSpawnExecutionContext(compile));
+    RemoteAction genruleAction =
+        service.buildRemoteAction(genrule, newSpawnExecutionContext(genrule));
+
+    assertThat(compileAction.getAction().getTimeout().getSeconds()).isEqualTo(240);
+    assertThat(genruleAction.getAction().getTimeout().getSeconds()).isEqualTo(900);
+  }
+
+  /** Without a matching entry or catch-all, the Action has no timeout. */
+  @Test
+  public void buildRemoteAction_defaultExecTimeout_noMatch() throws Exception {
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(Map.entry("CppCompile", Duration.ofMinutes(4))));
+    Spawn spawn = new SpawnBuilder("dummy").withMnemonic("Genrule").build();
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, newSpawnExecutionContext(spawn));
+
+    assertThat(remoteAction.getAction().hasTimeout()).isFalse();
+  }
+
+  /** A spawn's own timeout, such as a test's, takes precedence over the default. */
+  @Test
+  public void buildRemoteAction_defaultExecTimeout_keepsSpawnTimeout() throws Exception {
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(Map.entry("", Duration.ofMinutes(15))));
+    Spawn spawn = new SpawnBuilder("dummy").withMnemonic("TestRunner").build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    context.setTimeout(Duration.ofSeconds(300));
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getAction().getTimeout().getSeconds()).isEqualTo(300);
   }
 
   @Test

@@ -40,6 +40,7 @@ public class FakeSpawnExecutionContext implements SpawnExecutionContext {
 
   private boolean lockOutputFilesCalled;
   private boolean bustCaches;
+  private Duration timeout = Duration.ZERO;
 
   private final Spawn spawn;
   private final InputMetadataProvider inputMetadataProvider;
@@ -71,6 +72,11 @@ public class FakeSpawnExecutionContext implements SpawnExecutionContext {
 
   public void setBustCaches(boolean bustCaches) {
     this.bustCaches = bustCaches;
+  }
+
+  /** Sets the spawn's own timeout, such as a test's. */
+  public void setTimeout(Duration timeout) {
+    this.timeout = timeout;
   }
 
   @Override
@@ -115,7 +121,7 @@ public class FakeSpawnExecutionContext implements SpawnExecutionContext {
 
   @Override
   public Duration getTimeout() {
-    return Duration.ZERO;
+    return timeout;
   }
 
   @Override

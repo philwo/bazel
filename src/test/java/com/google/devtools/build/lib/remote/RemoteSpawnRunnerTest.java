@@ -129,6 +129,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
@@ -1322,6 +1323,102 @@ public class RemoteSpawnRunnerTest {
             any(OperationObserver.class));
     verify(service).downloadOutputs(any(), eq(RemoteActionResult.createFromResponse(resp)));
     verify(localRunner, never()).exec(eq(spawn), eq(policy));
+  }
+
+  /** An action killed at its default timeout is executed once more. */
+  @Test
+  public void testRemoteExecutionDefaultTimeout_retriedOnce() throws Exception {
+    remoteOptions.setRemoteLocalFallback(false);
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(Map.entry("", Duration.ofMinutes(4))));
+    RemoteSpawnRunner runner = newSpawnRunner();
+    RemoteExecutionService service = runner.getRemoteExecutionService();
+    ExecuteResponse succeeded =
+        ExecuteResponse.newBuilder()
+            .setResult(ActionResult.newBuilder().setExitCode(0).build())
+            .build();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenThrow(newExecutionTimeoutException())
+        .thenReturn(succeeded);
+    doReturn(null)
+        .when(service)
+        .downloadOutputs(any(), eq(RemoteActionResult.createFromResponse(succeeded)));
+    Spawn spawn = newSimpleSpawn();
+
+    SpawnResult res = runner.exec(spawn, getSpawnContext(spawn));
+
+    assertThat(res.status()).isEqualTo(Status.SUCCESS);
+    ArgumentCaptor<ExecuteRequest> requestCaptor = ArgumentCaptor.forClass(ExecuteRequest.class);
+    verify(executor, times(2))
+        .executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            requestCaptor.capture(),
+            any(OperationObserver.class));
+    assertThat(requestCaptor.getAllValues().get(1)).isEqualTo(requestCaptor.getAllValues().get(0));
+  }
+
+  /** An action killed at its default timeout twice fails with TIMEOUT. */
+  @Test
+  public void testRemoteExecutionDefaultTimeout_failsAfterRetry() throws Exception {
+    remoteOptions.setRemoteLocalFallback(false);
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(Map.entry("", Duration.ofMinutes(4))));
+    RemoteSpawnRunner runner = newSpawnRunner();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenThrow(newExecutionTimeoutException());
+    Spawn spawn = newSimpleSpawn();
+
+    SpawnResult res = runner.exec(spawn, getSpawnContext(spawn));
+
+    assertThat(res.status()).isEqualTo(Status.TIMEOUT);
+    verify(executor, times(2))
+        .executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class));
+  }
+
+  /** An action killed at its own timeout, such as a test's, isn't retried. */
+  @Test
+  public void testRemoteExecutionSpawnTimeout_notRetried() throws Exception {
+    remoteOptions.setRemoteLocalFallback(false);
+    remoteOptions.setRemoteDefaultExecTimeoutField(
+        ImmutableList.of(Map.entry("", Duration.ofMinutes(4))));
+    RemoteSpawnRunner runner = newSpawnRunner();
+    when(executor.executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class)))
+        .thenThrow(newExecutionTimeoutException());
+    Spawn spawn = newSimpleSpawn();
+    FakeSpawnExecutionContext context = getSpawnContext(spawn);
+    context.setTimeout(Duration.ofMinutes(5));
+
+    SpawnResult res = runner.exec(spawn, context);
+
+    assertThat(res.status()).isEqualTo(Status.TIMEOUT);
+    verify(executor)
+        .executeRemotely(
+            any(RemoteActionExecutionContext.class),
+            any(ExecuteRequest.class),
+            any(OperationObserver.class));
+  }
+
+  private static IOException newExecutionTimeoutException() {
+    ExecuteResponse resp =
+        ExecuteResponse.newBuilder()
+            .setStatus(
+                com.google.rpc.Status.newBuilder()
+                    .setCode(Code.DEADLINE_EXCEEDED.getNumber())
+                    .build())
+            .build();
+    return new IOException(new ExecutionStatusException(resp.getStatus(), resp));
   }
 
   @Test
